@@ -23,8 +23,12 @@
     heli:     CLS_META.heli,
   };
 
-  const state = { units: [], mode: "realistic", fetchedAt: null };
+  const state = { units: [], mode: "realistic", fetchedAt: null, desiredBR: null };
   let current = null; // { result, options } — kept so swaps can mutate the lineup
+
+  // Form state is remembered across page reloads (see save/loadPrefs). Bump the
+  // key if the set of saved fields changes in an incompatible way.
+  const PREFS_KEY = "wtlc_prefs_v1";
 
   /* ---------- data loading ---------- */
 
@@ -92,7 +96,10 @@
   // vehicles in the selected mode.
   function refreshBROptions() {
     const sel = $("targetBR");
-    const prev = parseFloat(sel.value);
+    // A saved BR (from a previous session) takes precedence on first build, then
+    // is consumed; after that we just preserve the current selection.
+    const prev = state.desiredBR != null ? state.desiredBR : parseFloat(sel.value);
+    state.desiredBR = null;
     const brs = new Set();
     for (const u of state.units) {
       if (u.country === nationId() && u.type === "tank" && u.br[state.mode] != null) {
@@ -116,11 +123,75 @@
       incSPAA: $("incSPAA").checked,
       incHelis: $("incHelis").checked,
       planeRole: $("planeRole").value,
+      bombersOnlyCAS: $("bombersOnlyCAS").checked,
       incPremium: $("incPremium").checked,
       incSquadron: $("incSquadron").checked,
       incGift: $("incGift").checked,
       playstyle: document.querySelector('input[name="playstyle"]:checked').value,
     };
+  }
+
+  /* ---------- preference persistence ---------- */
+
+  // "Only bombers for CAS" only matters when a CAS slot exists, so hide it for
+  // fighter-only / no-aircraft roles to avoid a confusing dead option.
+  function updateBomberVis() {
+    const role = $("planeRole").value;
+    $("bombersOnlyWrap").hidden = !(role === "attacker" || role === "balanced");
+  }
+
+  // Persist the whole form to localStorage so a page reload keeps your setup
+  // instead of snapping back to defaults.
+  function savePrefs() {
+    const p = {
+      nation: $("nation").value,
+      mode: state.mode,
+      targetBR: $("targetBR").value,
+      slots: $("slots").value,
+      incSPAA: $("incSPAA").checked,
+      incHelis: $("incHelis").checked,
+      planeRole: $("planeRole").value,
+      bombersOnlyCAS: $("bombersOnlyCAS").checked,
+      incPremium: $("incPremium").checked,
+      incSquadron: $("incSquadron").checked,
+      incGift: $("incGift").checked,
+      playstyle: document.querySelector('input[name="playstyle"]:checked')?.value,
+    };
+    try { localStorage.setItem(PREFS_KEY, JSON.stringify(p)); } catch { /* quota — non-critical */ }
+  }
+
+  function loadPrefs() {
+    try {
+      const raw = localStorage.getItem(PREFS_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+  }
+
+  // Apply a saved snapshot to the controls. Called before data loads so the BR
+  // list builds for the restored nation/mode; the actual BR value is deferred to
+  // refreshBROptions via state.desiredBR (its options don't exist yet).
+  function applyPrefs(p) {
+    if (!p) return;
+    const setChk = (id, v) => { if (typeof v === "boolean") $(id).checked = v; };
+    if (p.nation) $("nation").value = p.nation;
+    if (p.mode) {
+      state.mode = p.mode;
+      for (const b of $("modeSeg").children) b.classList.toggle("active", b.dataset.mode === p.mode);
+    }
+    if (p.slots != null && p.slots !== "") $("slots").value = p.slots;
+    if (p.planeRole) $("planeRole").value = p.planeRole;
+    setChk("incSPAA", p.incSPAA);
+    setChk("incHelis", p.incHelis);
+    setChk("bombersOnlyCAS", p.bombersOnlyCAS);
+    setChk("incPremium", p.incPremium);
+    setChk("incSquadron", p.incSquadron);
+    setChk("incGift", p.incGift);
+    if (p.playstyle) {
+      const r = document.querySelector(`input[name="playstyle"][value="${p.playstyle}"]`);
+      if (r) r.checked = true;
+    }
+    const br = parseFloat(p.targetBR);
+    if (!Number.isNaN(br)) state.desiredBR = br;
   }
 
   /* ---------- rendering ---------- */
@@ -254,6 +325,10 @@
 
   function init() {
     populateNations();
+    // Restore the saved form state before wiring events / loading data, so the
+    // BR dropdown is built for the remembered nation + mode.
+    applyPrefs(loadPrefs());
+    updateBomberVis();
 
     $("modeSeg").addEventListener("click", e => {
       const btn = e.target.closest("button[data-mode]");
@@ -261,9 +336,15 @@
       state.mode = btn.dataset.mode;
       for (const b of $("modeSeg").children) b.classList.toggle("active", b === btn);
       refreshBROptions();
+      savePrefs();
     });
 
     $("nation").addEventListener("change", refreshBROptions);
+    $("planeRole").addEventListener("change", updateBomberVis);
+
+    // Remember every control change across reloads.
+    $("lineupForm").addEventListener("change", savePrefs);
+    $("lineupForm").addEventListener("input", savePrefs);
 
     $("lineupForm").addEventListener("submit", e => {
       e.preventDefault();

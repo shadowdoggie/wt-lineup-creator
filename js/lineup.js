@@ -112,9 +112,11 @@ const LINEUP = (() => {
     // strategic bomber carries far more tonnage, yet spawns high, can't dive
     // accurately on tanks, and is easy SPAA food — so raw payload alone must not
     // let a B-29 win the CAS slot. Reward attackers, penalize heavy bombers.
+    // The bomber penalty is dropped when the user explicitly wants bombers for
+    // CAS, so they get ranked on payload instead of pushed down the list.
     const attackerScore = u =>
       brScore(u.br[o.mode], o.targetBR) * 1.2 + (payPctRaw(u) ?? 0) * 1.2 +
-      (u.cls === "attacker" ? 0.8 : 0) - (u.cls === "bomber" ? 0.7 : 0);
+      (u.cls === "attacker" ? 0.8 : 0) - (!o.bombersOnlyCAS && u.cls === "bomber" ? 0.7 : 0);
 
     // Helicopters live and die by their anti-tank punch, so rank by firepower
     // and ATGM capability — not BR closeness, which is all the old model used.
@@ -130,12 +132,21 @@ const LINEUP = (() => {
       brScore(u.br[o.mode], o.targetBR) * 1.0 + (u.sam ? 1.2 : 0) + (u.radar ? 0.6 : 0) +
       (spaaCalRaw(u) ?? 0.4) * 0.6;
 
+    // CAS candidate pool. "Only bombers for CAS" restricts it to level/dive
+    // bombers; if the bracket has none, fall back to all planes so the slot
+    // still fills (a warning below tells the user why).
+    let casPlanes = planes;
+    if (o.bombersOnlyCAS) {
+      const bombers = planes.filter(u => u.cls === "bomber");
+      if (bombers.length) casPlanes = bombers;
+    }
+
     // Ranked candidate pools per role — the UI swaps within these.
     const pools = {
       ground: rankBy(mains, groundScore),
       spaa: rankBy(spaas, spaaScore),
       fighter: rankBy(planes, fighterScore),
-      attacker: rankBy(planes, attackerScore),
+      attacker: rankBy(casPlanes, attackerScore),
       heli: rankBy(helis, heliScore),
     };
 
@@ -224,6 +235,9 @@ const LINEUP = (() => {
       warnings.push(`Only ${groundGot} ground vehicle(s) available in this BR bracket — try a different BR or enable more vehicle sources.`);
     }
     if (o.planeRole !== "none" && !planes.length) warnings.push("No aircraft available in this BR bracket.");
+    if (o.bombersOnlyCAS && (attackerN > 0) && planes.length && !planes.some(u => u.cls === "bomber")) {
+      warnings.push('"Only bombers for CAS" is on, but this BR bracket has no bombers — using the best available attacker instead.');
+    }
     if (o.incSPAA && !spaas.length) warnings.push("No SPAA available in this BR bracket.");
     if (o.incSPAA && spaas.length && o.slots < 3) warnings.push("SPAA skipped — needs at least 3 crew slots.");
     if (o.incHelis && !helis.length) warnings.push("No helicopters available in this BR bracket.");
