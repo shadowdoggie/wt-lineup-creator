@@ -279,48 +279,129 @@ def _gun_stats_from_model(model, mods):
     return None  # missile / HE-only / autocannon vehicles have no AP round
 
 
+_sensor_cache = {}
+_sensor_lock = threading.Lock()
+
+
+def _sensor_file(blk_ref):
+    """Fetch and cache a sensor .blk (relative to aces.vromfs.bin_u)."""
+    # Sensor paths in the model end with .blk; get_json_ci appends "x" to form
+    # the .blkx URL the mirror serves, trying original then lowercase casing.
+    with _sensor_lock:
+        if blk_ref in _sensor_cache:
+            return _sensor_cache[blk_ref]
+    sf = get_json_ci(blk_ref)
+    with _sensor_lock:
+        _sensor_cache[blk_ref] = sf
+    return sf
+
+
+def _radar_stats_from_sensors(model):
+    """Classify the SPAA's sensor suite from its sensor .blk files.
+    Returns (radar, radar_search, radar_range) where:
+      radar        — has a real radar sensor (not just an IR optic)
+      radar_search — has a search radar (can find targets autonomously)
+      radar_range  — max radar range in metres (0 if no radar)
+    The game models IR optics and ranging radars under the same 'sensors' block,
+    so checking model.get('sensors') alone is a false positive (Chaparral's
+    'radar' is actually an IR optic). We fetch each sensor .blk and inspect its
+    transivers: a 'search' key means search radar, 'track'/'radarTrack' is a
+    tracking radar, 'visibilityType: infraRed' means it's NOT a radar at all."""
+    sensors = model.get("sensors")
+    if not isinstance(sensors, dict):
+        return False, False, 0
+    sensor_list = sensors.get("sensor")
+    if not isinstance(sensor_list, list):
+        sensor_list = [sensor_list] if sensor_list else []
+
+    has_radar = False
+    has_search = False
+    max_range = 0.0
+    for s in sensor_list:
+        if not isinstance(s, dict) or not isinstance(s.get("blk"), str):
+            continue
+        sf = _sensor_file(s["blk"])
+        if not isinstance(sf, dict):
+            continue
+        trans = sf.get("transivers")
+        if not isinstance(trans, dict):
+            continue
+        for tname, tval in trans.items():
+            if not isinstance(tval, dict):
+                continue
+            # IR optics are NOT radars — they're passive infrared trackers.
+            if tval.get("visibilityType") == "infraRed":
+                continue
+            has_radar = True
+            if tname == "search":
+                has_search = True
+            r = tval.get("range")
+            if isinstance(r, (int, float)) and r > max_range:
+                max_range = r
+    return has_radar, has_search, round(max_range)
+
+
 def _spaa_stats_from_model(model):
     """Anti-air firepower descriptor for an SPAA, all from its tankmodel:
-      sam   — carries a surface-to-air missile launcher
-      radar — has a tracking-radar sensor block
-      cal   — largest gun caliber (mm); missile-launcher diameters excluded
+      sam         — carries a surface-to-air missile launcher
+      samRange    — max SAM engagement range (m) from AttackMaxRadius
+      radar       — has a real radar sensor (not an IR optic)
+      radarSearch — has a search radar (can find targets autonomously)
+      radarRange  — max radar range (m)
+      cal         — largest gun caliber (mm); missile-launcher diameters excluded
+      gunAmmo     — total ammo capacity of the main AA gun(s)
     A radar SAM launcher and a towed quad-MG both tag as `type_spaa`; this is
-    what tells them apart."""
+    what tells them apart. SAM range and radar range/quality are the dominant
+    anti-air metrics at top tier — a Pantsir (20km SAM, 45km search radar) is
+    vastly superior to a Chaparral (10km SAM, IR optic only) despite both being
+    'SAM + radar' under the old flat booleans."""
     common = model.get("commonWeapons") or {}
     weps = common.get("Weapon") if isinstance(common, dict) else common
     weps = weps if isinstance(weps, list) else [weps]
 
     sam = False
+    sam_range = 0.0
     cal = 0.0
+    gun_ammo = 0
     for w in weps:
         if not (isinstance(w, dict) and isinstance(w.get("blk"), str)):
             continue
         blk = w["blk"].lower()
         if "rocket_launcher" in blk or "missile" in blk:
-            sam = True  # its "caliber" is the missile diameter — don't count it
+            sam = True
+            r = w.get("AttackMaxRadius")
+            if isinstance(r, (int, float)) and r > sam_range:
+                sam_range = r
             continue
         if "dummy" in blk or "machinegun" in blk:
-            continue  # MGs aren't the AA gun that defines the vehicle
+            continue
         m = CAL_RE.search(blk.rsplit("/", 1)[-1])
         if not m:
             continue
         bore = float(m.group(1).replace("_", "."))
-        # Many SAMs (Roland, Chaparral, ADATS, NASAMS, HQ-11…) are modeled as a
-        # `_cannon` whose "caliber" is the missile's body diameter. Real AA guns
-        # in the game top out at 80mm; every SPAA weapon of 85mm+ is a missile,
-        # so treat those as a launcher, not a gun.
         if bore >= 85:
             sam = True
+            r = w.get("AttackMaxRadius")
+            if isinstance(r, (int, float)) and r > sam_range:
+                sam_range = r
         else:
             cal = max(cal, bore)
-    radar = bool(model.get("sensors"))
+            bullets = w.get("bullets")
+            if isinstance(bullets, (int, float)):
+                gun_ammo = max(gun_ammo, int(bullets))
+
+    has_radar, radar_search, radar_range = _radar_stats_from_sensors(model)
+
     # A radar SPAA with no guns (cal=0) and no missile weapons is the FCS/radar
     # half of a split SAM system (e.g. NASAMS FCS, SAMP/T FCS, Iris-SLM FCS).
-    # It's a real SAM system in-game — the launcher is the paired vehicle — so
-    # treat it as SAM for scoring. This is a game-wide pattern, not a tank list.
-    if radar and not sam and cal == 0:
+    if has_radar and not sam and cal == 0:
         sam = True
-    return {"sam": int(sam), "radar": int(radar), "cal": round(cal, 1)}
+    return {
+        "sam": int(sam), "samRange": round(sam_range),
+        "radar": int(has_radar), "radarSearch": int(radar_search),
+        "radarRange": radar_range,
+        "cal": round(cal, 1), "gunAmmo": gun_ammo,
+    }
 
 
 # --- Armor extraction ------------------------------------------------------
@@ -522,20 +603,33 @@ def _has_autoloader(model):
     return False
 
 
-def _stabilized(model):
-    """True if the tank has a gun stabilizer (horizontal or vertical). WWII tanks
-    have no gunStabilizer block at all; modern tanks have hasHorizontal/hasVertical
-    booleans. Stabilized tanks can shoot on the move — a major combat advantage."""
+def _stabilizer_planes(model):
+    """Number of stabilizer planes: 0 (none), 1 (horizontal-only), 2 (2-plane).
+    WWII tanks have no gunStabilizer block at all; modern tanks have
+    hasHorizontal/hasVertical booleans. A 1-plane stabilizer (horizontal-only)
+    can't fire accurately on the move in the vertical plane — a major
+    disadvantage vs a 2-plane stabilizer."""
     common = model.get("commonWeapons") or {}
     weps = common.get("Weapon") if isinstance(common, dict) else common
     weps = weps if isinstance(weps, list) else [weps]
+    has_h = False
+    has_v = False
     for w in weps:
-        if not isinstance(w, dict):
+        if not (isinstance(w, dict) and isinstance(w.get("blk"), str)):
+            continue
+        if "machinegun" in w["blk"].lower():
             continue
         gs = w.get("gunStabilizer")
-        if isinstance(gs, dict) and (gs.get("hasHorizontal") or gs.get("hasVertical")):
-            return True
-    return False
+        if isinstance(gs, dict):
+            if gs.get("hasHorizontal"):
+                has_h = True
+            if gs.get("hasVertical"):
+                has_v = True
+    if has_h and has_v:
+        return 2
+    if has_h or has_v:
+        return 1
+    return 0
 
 
 # Device tokens that mark an IR / image-intensifier night-vision optic. Matched
@@ -565,16 +659,25 @@ def _classify_optic_key(k):
 
 
 def _night_vision(model):
-    """Returns (thermal, nv): thermal=True if the tank has thermal imaging,
-    nv=True if it has any night vision (IR or thermal). WWII tanks have no
+    """Returns (thermal, nv, thermal_gen): thermal=True if the tank has thermal
+    imaging, nv=True if it has any night vision (IR or thermal), thermal_gen is
+    the best thermal generation tier (0=none, 1-3+ from the datamine `tier`
+    field on the night_vision_system modification). WWII tanks have no
     nightVision data at all. Signals live in up to three places and a tank often
     has several at once (e.g. stock driverIr in the top-level `nightVision`
     block PLUS gunner/commander thermals in the night_vision_system
     modification), so we OR across ALL of them rather than returning at the first
     hit — otherwise a stock driver-IR device masks the far more important gunner
-    thermal and the tank is reported as NV-only."""
+    thermal and the tank is reported as NV-only.
+
+    Thermal generation (tier) is the game's own 1/2/3 grading of thermal image
+    quality. Gen 1 is crude (low resolution, high noise); Gen 3 is the modern
+    standard (high resolution, can see through smoke). A Gen 1 thermal scores
+    far below a Gen 3 — collapsing both to a flat boolean was the same class of
+    bug as the ATGM quality issue."""
     thermal = False
     nv = False
+    thermal_gen = 0
 
     def scan(block):
         nonlocal thermal, nv
@@ -601,10 +704,35 @@ def _night_vision(model):
             effects = mod.get("effects")
             if isinstance(effects, dict):
                 scan(effects.get("nightVision"))
-            # Robustness for future patches: a modification whose *name* calls
-            # out thermal is a thermal-sight upgrade, even if Gaijin restructures
-            # where the sight parameters live (the "..._nv_to_thermal" pattern).
-            if "thermal" in _key_tokens(mod_name):
+            # Extract the thermal generation tier from the modification block.
+            # The `tier` field is the game's own grading (1/2/3+). Take the best
+            # tier across all thermal-bearing modifications.
+            if "thermal" in _key_tokens(mod_name) or (
+                isinstance(effects, dict) and isinstance(effects.get("nightVision"), dict)
+                and any("thermal" in _key_tokens(k) for k in effects["nightVision"])
+            ):
+                tier = mod.get("tier")
+                if isinstance(tier, (int, float)):
+                    thermal_gen = max(thermal_gen, int(tier))
+                elif isinstance(effects, dict) and isinstance(effects.get("nightVision"), dict):
+                    # No tier field — infer generation from the best thermal
+                    # optic's resolution. 800x600 = Gen 3, 500x300 = Gen 2,
+                    # anything lower or unknown = Gen 1.
+                    for k2, v2 in effects["nightVision"].items():
+                        if not isinstance(v2, dict):
+                            continue
+                        if "thermal" not in _key_tokens(k2):
+                            continue
+                        res = v2.get("resolution")
+                        if isinstance(res, list) and len(res) >= 2:
+                            w, h = res[0], res[1]
+                            if isinstance(w, (int, float)) and isinstance(h, (int, float)):
+                                inferred = 1
+                                if w >= 800 and h >= 600:
+                                    inferred = 3
+                                elif w >= 500 and h >= 300:
+                                    inferred = 2
+                                thermal_gen = max(thermal_gen, inferred)
                 thermal = True
                 nv = True
     # 3) hasNightVision flag on turret weapons — least specific (NV, not thermal).
@@ -613,13 +741,13 @@ def _night_vision(model):
         weps = common.get("Weapon") if isinstance(common, dict) else common
         weps = weps if isinstance(weps, list) else [weps]
         for w in weps:
-            if not isinstance(w, dict):
+            if not (isinstance(w, dict) and isinstance(w.get("blk"), str)):
                 continue
             turret = w.get("turret", {})
             if isinstance(turret, dict) and turret.get("hasNightVision"):
                 nv = True
                 break
-    return thermal, nv
+    return thermal, nv, thermal_gen
 
 
 def _reverse_ratio(model):
@@ -660,9 +788,10 @@ def fetch_vehicle(unit_id):
     spaa = _spaa_stats_from_model(model) if unit_id in _spaa_ids else None
     armor = _armor_stats_from_model(model)
     if armor is not None:
-        armor["stab"] = 1 if _stabilized(model) else 0
-        thermal, nv = _night_vision(model)
+        armor["stab"] = _stabilizer_planes(model)
+        thermal, nv, thermal_gen = _night_vision(model)
         armor["thermal"] = 1 if thermal else 0
+        armor["thermalGen"] = thermal_gen if thermal else 0
         armor["nv"] = 1 if nv else 0
         armor["rev"] = _reverse_ratio(model)
         armor["al"] = 1 if _has_autoloader(model) else 0

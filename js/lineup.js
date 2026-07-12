@@ -215,8 +215,8 @@ const LINEUP = (() => {
       (ps.classW[u.cls] || 0.5) * 1.2 +
       ps.stat(u, p) * 1.3 +
       fightUptier(u) * 0.9 +
-      (u.stabilized ? 0.12 : 0) +
-      (u.thermal ? 0.12 : u.nv ? 0.05 : 0) +
+      (u.stabPlanes === 2 ? 0.12 : u.stabPlanes === 1 ? 0.06 : 0) +
+      (u.thermal ? Math.min(0.04 + u.thermalGen * 0.04, 0.16) : u.nv ? 0.05 : 0) +
       ownershipNudge(u);
 
     // Ground-attack firepower = real ordnance weight with a premium for ATGMs
@@ -233,19 +233,21 @@ const LINEUP = (() => {
     // Fighter and attacker scores are intentionally normalized to ~0..1 so the
     // balanced single-slot tiebreak compares like with like (raw attackerScore
     // used to sum higher and almost always win).
-    // Fighters: dogfight stats + AAM presence + BVR (ARH) + countermeasures.
+    // Fighters: dogfight stats + AAM quality (graded by missile family) + BVR
+    // (ARH fire-and-forget, separated from SARH) + countermeasures.
     const fighterRaw = u =>
       brScore(u.br[o.mode], o.targetBR) * 1.2 +
       turnQuality(u) * 0.75 +
       (climbPctRaw(u) ?? 0.5) * 0.55 +
       (speedPctRaw(u) ?? 0.5) * 0.35 +
       (u.cls === "fighter" ? 0.7 : 0) +
-      (u.aam ? 0.45 : 0) +
-      (u.arh ? 0.35 : 0) +
+      (u.aamQuality * 0.5) +   // graded: rear-aspect IR 0.15 → ARH 0.5
+      (u.arh ? 0.35 : 0) +    // ARH fire-and-forget BVR
+      (u.sarh ? 0.15 : 0) +   // SARH: must illuminate — weaker BVR than ARH
       (u.cm ? 0.2 : 0) +
       ownershipNudge(u);
-    // Max theoretical ≈ 1.2+0.75+0.55+0.35+0.7+0.45+0.35+0.2+0.55 ≈ 5.1
-    const FIGHTER_NORM = 5.1;
+    // Max theoretical ≈ 1.2+0.75+0.55+0.35+0.7+0.5+0.35+0.15+0.2+0.55 ≈ 5.3
+    const FIGHTER_NORM = 5.3;
     const fighterScore = u => fighterRaw(u) / FIGHTER_NORM;
 
     // CAS: payload + ATGM, plus enough flight stats to prefer a jet that can
@@ -279,11 +281,25 @@ const LINEUP = (() => {
       ownershipNudge(u);
 
     const spaaCalRaw = percentiler(spaas, u => u.aaCal);
+    const spaaAmmoRaw = percentiler(spaas, u => u.gunAmmo > 0 ? u.gunAmmo : null);
+    // SPAA: SAM range is THE defining top-tier metric. A Pantsir (20km) is
+    // vastly superior to a Chaparral (10km) despite both being "SAM + radar"
+    // under flat booleans. Radar quality also matters: a search radar (45km,
+    // finds targets autonomously) is far better than a ranging-only radar (5km).
+    // Gun ammo capacity corrects the caliber-inverted ranking (a 20mm Gatling
+    // with 2200 rds beats a 57mm hand-loaded twin with 148 rds for AA work).
     const spaaScore = u => {
       const calScore = (u.aaCal == null || u.aaCal === 0) ? 0.4 : (spaaCalRaw(u) ?? 0.4);
+      const ammoScore = spaaAmmoRaw(u) ?? 0.4;
+      const samScore = u.sam
+        ? Math.min(1.2, 0.4 + Math.min((u.samRange || 0) / 20000, 1) * 0.8)
+        : 0;
+      const radarScore = u.radar
+        ? (u.radarSearch ? 0.4 : 0.15) + Math.min((u.radarRange || 0) / 45000, 1) * 0.2
+        : 0;
       return brScore(u.br[o.mode], o.targetBR) * 1.4 +
-        (u.sam ? 1.2 : 0) + (u.radar ? 0.6 : 0) +
-        calScore * 0.6 +
+        samScore + radarScore +
+        calScore * 0.3 + ammoScore * 0.3 +
         ownershipNudge(u);
     };
 

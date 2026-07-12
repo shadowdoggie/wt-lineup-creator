@@ -45,11 +45,13 @@ const WT_DATA = (() => {
   // without its field name changing (e.g. name-marker stripping below), so
   // already-cached clients re-parse instead of serving the old-format value.
   const SCHEMA = "id name country type cls diveBomber rank br premium squadron gift " +
-    "researchPoints armorHull armorTurret armorEff hasEra hasComposite stabilized thermal nv revRatio " +
-    "hpPerTon gunVel gunCal gunPen gunPenSrc autoLoader turnTime maxSpeed climbRate " +
+    "researchPoints armorHull armorTurret armorEff hasEra hasComposite autoLoader " +
+    "stabPlanes stabilized thermal thermalGen nv revRatio " +
+    "hpPerTon gunVel gunCal gunPen gunPenSrc turnTime maxSpeed climbRate " +
     "crewCount reloadTime turretSpeed " +
-    "ordnanceKg atgm atgmQuality atgmRange aam arh cm sam radar aaCal " +
-    "fmt:hybrid-pen-table|est;armor:steel+flags+eff;reload:al-flag;air:aam";
+    "ordnanceKg atgm atgmQuality atgmRange aam arh sarh aamQuality cm " +
+    "sam samRange radar radarSearch radarRange gunAmmo aaCal " +
+    "fmt:hybrid-pen-table|est;armor:steel+flags+eff;reload:al-flag;air:aam-quality;spaa:range+radar";
   function hash32(s) {
     let h = 2166136261;
     for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
@@ -160,25 +162,112 @@ const WT_DATA = (() => {
   }
 
   // Air-to-air / survivability flags from the same weapon presets (fighters):
-  //   aamGuidanceType — IR/basic ("default"), ARH ("arh"), SACLOS, etc.
+  //   aamGuidanceType — IR/basic ("default"), ARH ("arh"), SARH ("sarh"), SACLOS
   //   hasCountermeasures — flares/chaff available on a loadout
-  // These are presence flags across any preset (you can equip AAMs or CMs even
-  // if the heaviest bomb load doesn't carry them).
+  //   sum_weapons — weapon name -> count (the missile identity is in the name)
+  //
+  // AAM quality varies enormously within each guidance class. "default" covers
+  // everything from a 1956 rear-aspect AIM-9B to a modern all-aspect HOBS R-73
+  // with thrust-vectoring. The wpcost guidance tag alone can't tell them apart,
+  // so we grade by missile family name from sum_weapons — the same approach the
+  // game's own community uses to rank AAM lethality.
+  //
+  // Quality tiers (0..1):
+  //   0.3 — rear-aspect-only early IR (AIM-9B/E/J/P, R-3S, Shafrir)
+  //   0.5 — all-aspect IR (AIM-9L/M, R-60M, Magic 2, Python 3)
+  //   0.6 — HOBS/high-off-boresight IR (R-73, AIM-9X, AAM-3, IRIS-T)
+  //   0.7 — SARH (AIM-7, R-27R/ER, Skyflash, Matra 530D, Aspide)
+  //   1.0 — ARH fire-and-forget (AIM-120, R-77, MICA, Derby, PL-12, AAM-4)
+  const AAM_QUALITY_BY_NAME = {
+    // ARH (active-radar homing) — fire-and-forget BVR, top tier
+    "aim_120": 1.0, "aim_120a": 1.0, "aim_120b": 1.0, "aim_120c": 1.0, "aim_120d": 1.0,
+    "r_77": 1.0, "rvv_ae": 1.0, "rvv_sd": 1.0, "r_77_1": 1.0,
+    "pl12": 1.0, "pl_12": 1.0, "pl12a": 1.0, "sd10a": 1.0,
+    "mica_em": 1.0, "derby": 1.0, "r_darter": 1.0, "aam4": 1.0,
+    "aim_54": 1.0, "aim_54a": 1.0, "aim_54c": 1.0, "fakour_90": 1.0,
+    "rb99": 1.0, "meteor": 1.0,
+    // HOBS / high-off-boresight IR with thrust-vectoring or large seeker gimbal
+    "r_73": 0.6, "r_73e": 0.6, "aim9x": 0.6, "aim_9x": 0.6,
+    "aam3": 0.6, "iris_t": 0.6, "pyton_3": 0.6, "python_3": 0.6,
+    "rb74": 0.55, "rb74m": 0.55, // Rb74 is IRIS-T or AIM-9L depending on variant
+    // All-aspect IR — can lock from any aspect, flare-resistant
+    "aim9l": 0.5, "aim_9l": 0.5, "aim9m": 0.5, "aim_9m": 0.5,
+    "r_60m": 0.5, "r_60mk": 0.5, "r_27t": 0.5, "r_27et": 0.5,
+    "r_550_magic_2": 0.5, "magic_2": 0.5, "aa20": 0.5,
+    "pl8b": 0.5, "pl_8b": 0.5, "pl5c": 0.5, "pl_5c": 0.5, "pl5e2": 0.5,
+    "redtop": 0.5, "firestreak": 0.4,
+    "rb24j": 0.5, // Rb24J = AIM-9L equivalent
+    // SARH (semi-active radar homing) — launcher must illuminate the whole flight
+    "aim7": 0.7, "aim_7": 0.7, "aim7m": 0.7, "aim7f": 0.7, "aim7e": 0.7, "aim7p": 0.7,
+    "skyflash": 0.7, "r_27r": 0.7, "r_27er": 0.75, "r_27r1": 0.7, "r_27er1": 0.75,
+    "matra_super_530d": 0.7, "matra_super_530f": 0.7, "r_530_matra_radar": 0.65,
+    "aspide_1a": 0.7, "sedjil": 0.7,
+    "r_23r": 0.65, "r_24r": 0.7, "r_3r": 0.5, "r_40rd": 0.6,
+    // Early / rear-aspect-only IR — tail-chase-only, easily defeated
+    "aim9b": 0.3, "aim_9b": 0.3, "aim9c": 0.3, "aim_9c": 0.3,
+    "aim9d": 0.35, "aim_9d": 0.35, "aim9e": 0.35, "aim_9e": 0.35,
+    "aim9g": 0.35, "aim9h": 0.35, "aim9j": 0.3, "aim_9j": 0.3,
+    "aim9n": 0.3, "aim9p": 0.3, "aim_9p": 0.3, "aim9p4": 0.3, "aim_9p4": 0.3,
+    "r_3s": 0.3, "r_13m1": 0.3, "r_13m": 0.3, "r_60": 0.35,
+    "r_23t": 0.3, "r_24t": 0.3, "r_27t1": 0.45, "r_27et1": 0.5,
+    "r_550_magic": 0.35, "r_511_matra": 0.3, "r_530_matra_ir": 0.35,
+    "shafrir_1": 0.25, "shafrir_2": 0.35,
+    "pl2": 0.3, "pl5b": 0.35, "pl_5b": 0.35, "pl7": 0.4, "pl8": 0.45,
+    "aim4f_falcon": 0.3, "aim4g_falcon": 0.3,
+    "rb24": 0.3, "rb71": 0.5, // Rb24 = AIM-9B, Rb71 = Skyflash
+    "maa_1": 0.3, "a91": 0.3,
+    "lwf_63": 0.25, "lwf_63_75": 0.25, "lwf_63_80": 0.25,
+  };
+
+  function aamNameQuality(name) {
+    // Strip prefix (rocketguns_<country>_) and known variant suffixes to get
+    // the canonical missile name, then look it up. Weapon names in sum_weapons
+    // look like "rocketguns_us_aim9m_sidewinder_default" — we need to strip
+    // "rocketguns_us_" and "_default" to get "aim9m_sidewinder".
+    let n = name.replace(/^rocketguns_/, "")
+      .replace(/^(us|germ|ussr|uk|jp|cn|it|fr|sw|su|il|sww|swd|sws|ro|ir|rus)_/, "")
+      .replace(/_default$|_bol_pod$|_missile_test$|_switzerland$|_iaf$|_hungary$|_germany$|_italy$|_china$|_japan$|_thailand$/, "");
+    // Exact match first
+    if (n in AAM_QUALITY_BY_NAME) return AAM_QUALITY_BY_NAME[n];
+    // Check if any table key is a prefix of the name (longest match wins).
+    // This handles names like "aim9m_sidewinder" -> matches "aim9m",
+    // "aim_120a" -> matches "aim_120", "aim7m_sparrow_f_16" -> matches "aim7m".
+    let bestKey = null;
+    for (const key of Object.keys(AAM_QUALITY_BY_NAME)) {
+      if (n.startsWith(key) && (!bestKey || key.length > bestKey.length)) {
+        bestKey = key;
+      }
+    }
+    return bestKey ? AAM_QUALITY_BY_NAME[bestKey] : 0;
+  }
+
   function airCombat(w) {
-    let aam = false, arh = false, cm = false;
+    let aam = false, arh = false, sarh = false, cm = false;
+    let bestQuality = 0;
     for (const preset of Object.values(w.weapons || {})) {
       if (preset.hasCountermeasures) cm = true;
       const g = preset.aamGuidanceType;
       if (g == null) continue;
-      aam = true;
       const types = Array.isArray(g) ? g : [g];
+      let presetHasAAM = false;
       for (const t of types) {
         const s = String(t).toLowerCase();
-        // Active-radar and any future SARH-style tags count as beyond-visual-range.
-        if (s === "arh" || s === "sarh" || s.includes("radar")) arh = true;
+        if (s === "arh") { arh = true; presetHasAAM = true; }
+        else if (s === "sarh" || (s.includes("radar") && s !== "arh")) { sarh = true; presetHasAAM = true; }
+        if (s !== "saclos") presetHasAAM = true; // saclos AAMs are barely usable
+      }
+      if (presetHasAAM) aam = true;
+      // Grade missile quality from weapon names in sum_weapons
+      const sw = preset.sum_weapons;
+      if (sw && typeof sw === "object") {
+        for (const wname of Object.keys(sw)) {
+          if (!wname.startsWith("rocketguns_") || wname.includes("countermeasure")) continue;
+          const q = aamNameQuality(wname);
+          if (q > bestQuality) bestQuality = q;
+        }
       }
     }
-    return { aam, arh, cm };
+    return { aam, arh, sarh, aamQuality: bestQuality, cm };
   }
 
   function classify(type, tags) {
@@ -302,7 +391,9 @@ const WT_DATA = (() => {
         hasComposite: false, // armor.json — composite/NERA arrays present
         autoLoader: false,   // armor.json — game's own autoLoader flag on the main gun
         stabilized: false,
+        stabPlanes: 0,     // armor.json — 0/1/2 stabilizer planes
         thermal: false,
+        thermalGen: 0,     // armor.json — thermal generation tier (0=none, 1-4)
         nv: false,
         revRatio: 0,
         hpPerTon: null,
@@ -311,7 +402,11 @@ const WT_DATA = (() => {
         gunPen: null,    // mm at ~1km when known
         gunPenSrc: null, // "table" (ArmorPower) | "est" (physics) | null
         sam: false,
+        samRange: 0,     // spaa.json — max SAM engagement range (m)
         radar: false,
+        radarSearch: false, // spaa.json — has search radar (not just tracking)
+        radarRange: 0,   // spaa.json — max radar range (m)
+        gunAmmo: 0,      // spaa.json — main AA gun ammo capacity
         aaCal: null,
         crewCount: typeof w.crewTotalCount === "number" ? w.crewTotalCount : null,
         reloadTime: typeof w.reloadTime_cannon === "number" ? w.reloadTime_cannon : null,
@@ -324,7 +419,9 @@ const WT_DATA = (() => {
         atgmQuality: fire ? fire.atgmQuality : 0,
         atgmRange: fire ? fire.atgmRange : 0,
         aam: combat ? combat.aam : false,   // any air-to-air missiles
-        arh: combat ? combat.arh : false,   // active-radar / BVR-class AAMs
+        arh: combat ? combat.arh : false,   // active-radar homing (fire-and-forget BVR)
+        sarh: combat ? combat.sarh : false, // semi-active radar homing (must illuminate)
+        aamQuality: combat ? combat.aamQuality : 0, // best AAM quality (0..1) by missile name
         cm: combat ? combat.cm : false,     // countermeasures (flares/chaff)
       });
     }
@@ -477,7 +574,13 @@ const WT_DATA = (() => {
     // No SPAA file: anti-air scoring falls back to BR closeness only.
     if (spaa) for (const u of tanks) {
       const s = spaa[u.id];
-      if (s) { u.sam = !!s.sam; u.radar = !!s.radar; u.aaCal = s.cal || null; }
+      if (s) {
+        u.sam = !!s.sam; u.radar = !!s.radar; u.aaCal = s.cal || null;
+        u.samRange = s.samRange || 0;
+        u.radarSearch = !!s.radarSearch;
+        u.radarRange = s.radarRange || 0;
+        u.gunAmmo = s.gunAmmo || 0;
+      }
     }
     // Armor: factual steel plate thicknesses (displayed) + ranking-only eff
     // protection score + ERA/composite presence flags + stab/thermals/NV/
@@ -491,8 +594,10 @@ const WT_DATA = (() => {
       u.hasEra = !!a.era;
       u.hasComposite = !!a.comp;
       u.autoLoader = !!a.al;
-      u.stabilized = !!a.stab;
+      u.stabilized = a.stab >= 1;
+      u.stabPlanes = a.stab || 0;
       u.thermal = !!a.thermal;
+      u.thermalGen = a.thermalGen || 0;
       u.nv = !!a.nv;
       u.revRatio = a.rev || 0;
     }

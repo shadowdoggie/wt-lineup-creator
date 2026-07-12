@@ -312,8 +312,8 @@
       }
       if (u.hasEra) bits.push(stat("ERA present on the model (spaded packs included)", `${ico("i-shield")} ERA`));
       if (u.hasComposite) bits.push(stat("Composite / NERA arrays present on the model", `${ico("i-shield")} Composite`));
-      if (u.stabilized) bits.push(stat("Gun stabilizer — can shoot on the move", `${ico("i-bolt")} Stab`));
-      if (u.thermal) bits.push(stat("Thermal imaging (researchable upgrades counted)", `${ico("i-scope")} Thermal`));
+      if (u.stabilized) bits.push(stat(u.stabPlanes === 2 ? "Two-plane stabilizer — fires accurately on the move in all axes" : "One-plane stabilizer — horizontal only, can't elevate on the move", `${ico("i-bolt")} Stab${u.stabPlanes === 2 ? " 2P" : ""}`));
+      if (u.thermal) bits.push(stat(`Thermal imaging (generation ${u.thermalGen || "?"})${u.thermalGen >= 3 ? " — smoke-piercing quality" : ""}`, `${ico("i-scope")} Thermal${u.thermalGen ? ` Gen ${u.thermalGen}` : ""}`));
       else if (u.nv) bits.push(stat("Night vision", `${ico("i-scope")} NV`));
       if (u.reloadTime != null) {
         // "auto" only for real autoloaders (the game's own flag) — a 5s
@@ -330,15 +330,22 @@
           `${ico("i-target")} ${u.gunVel} m/s${cal}`));
       }
     } else if (slot.category === "spaa") {
-      if (u.sam) bits.push(stat("Carries surface-to-air missiles", `${ico("i-missile")} SAM`));
-      if (u.radar) bits.push(stat("Has a tracking radar", `${ico("i-radar")} Radar`));
-      if (u.aaCal) bits.push(stat("Main gun caliber", `${ico("i-target")} ${u.aaCal}mm`));
+      if (u.sam) bits.push(stat(`Surface-to-air missiles${u.samRange ? ` · ${u.samRange >= 1000 ? (u.samRange / 1000).toFixed(0) + "km" : u.samRange + "m"} standoff` : ""}`, `${ico("i-missile")} SAM${u.samRange ? ` ${(u.samRange / 1000).toFixed(0)}km` : ""}`));
+      if (u.radar) bits.push(stat(`${u.radarSearch ? "Search + tracking radar" : "Tracking radar"}${u.radarRange ? ` · ${u.radarRange >= 1000 ? (u.radarRange / 1000).toFixed(0) + "km" : u.radarRange + "m"} range` : ""}`, `${ico("i-radar")} ${u.radarSearch ? "SrRdr" : "Rdr"}${u.radarRange ? ` ${(u.radarRange / 1000).toFixed(0)}km` : ""}`));
+      if (u.aaCal) bits.push(stat(`Main gun caliber${u.gunAmmo ? ` · ${u.gunAmmo} rds` : ""}`, `${ico("i-target")} ${u.aaCal}mm${u.gunAmmo ? ` · ${u.gunAmmo}` : ""}`));
     } else if (slot.category === "fighter") {
       if (u.turnTime != null) bits.push(stat("Sustained turn time", `${ico("i-turn")} ${u.turnTime}s turn`));
       if (u.climbRate != null) bits.push(stat("Rate of climb", `${ico("i-bolt")} ${u.climbRate} m/s climb`));
       if (u.maxSpeed != null) bits.push(stat("Max speed (shop)", `${ico("i-gauge")} ${u.maxSpeed}`));
-      if (u.aam) bits.push(stat(u.arh ? "Air-to-air missiles incl. radar-homing (BVR-class)" : "Air-to-air missiles",
-        `${ico("i-missile")} ${u.arh ? "AAM/BVR" : "AAM"}`));
+      if (u.aam) {
+        const aamLabel = u.arh ? "AAM ARH" : u.sarh ? "AAM SARH" : u.aamQuality >= 0.6 ? "AAM HOBS" : u.aamQuality >= 0.5 ? "AAM All-asp" : "AAM";
+        const aamTitle = u.arh ? "Air-to-air missiles incl. active-radar (fire-and-forget BVR)"
+          : u.sarh ? "Air-to-air missiles incl. semi-active radar (must illuminate)"
+          : u.aamQuality >= 0.6 ? "High-off-boresight IR missiles (thrust-vectoring/HOBS)"
+          : u.aamQuality >= 0.5 ? "All-aspect IR missiles (can lock from any angle)"
+          : "Air-to-air missiles (rear-aspect IR)";
+        bits.push(stat(aamTitle, `${ico("i-missile")} ${aamLabel}`));
+      }
       if (u.cm) bits.push(stat("Countermeasures (flares/chaff)", `${ico("i-radar")} CM`));
     } else if (slot.category === "attacker" || slot.category === "heli") {
       if (u.atgm) bits.push(atgmBadge(u));
