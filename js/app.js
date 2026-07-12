@@ -32,7 +32,6 @@
   // Form state is remembered across page reloads (see save/loadPrefs). Bump the
   // key if the set of saved fields changes in an incompatible way.
   const PREFS_KEY = "wtlc_prefs_v5";
-  const OWNED_KEY = "wtlc_owned_v1";
 
   /* ---------- data loading ---------- */
 
@@ -145,18 +144,6 @@
     }
   }
 
-  function loadOwned() {
-    try {
-      const raw = localStorage.getItem(OWNED_KEY);
-      const arr = raw ? JSON.parse(raw) : [];
-      return new Set(Array.isArray(arr) ? arr : []);
-    } catch { return new Set(); }
-  }
-  function saveOwned(set) {
-    try { localStorage.setItem(OWNED_KEY, JSON.stringify([...set])); } catch { /* quota */ }
-  }
-  let ownedIds = loadOwned();
-
   function currentOptions() {
     // The CAS-restriction dropdown maps to the two booleans lineup.js consumes:
     // "both" = level OR dive bombers only, "any" = no restriction.
@@ -176,8 +163,6 @@
       incSquadron: $("incSquadron").checked,
       incGift: $("incGift").checked,
       playstyle: document.querySelector('input[name="playstyle"]:checked')?.value || "balanced",
-      ownedMode: $("ownedMode")?.value || "prefer",
-      ownedIds,
     };
   }
 
@@ -212,7 +197,6 @@
       spaaCount: $("spaaCount")?.value || "auto",
       heliCount: $("heliCount")?.value || "0",
       casType: $("casType").value,
-      ownedMode: $("ownedMode")?.value || "prefer",
       incPremium: $("incPremium").checked,
       incSquadron: $("incSquadron").checked,
       incGift: $("incGift").checked,
@@ -257,7 +241,6 @@
     else if (typeof p.incHelis === "boolean" && $("heliCount")) {
       $("heliCount").value = p.incHelis ? "auto" : "0";
     }
-    if (p.ownedMode && $("ownedMode")) $("ownedMode").value = p.ownedMode;
     // Prefer the new dropdown value; migrate old level/dive checkbox prefs so a
     // returning user keeps their bomber-CAS choice.
     if (p.casType) $("casType").value = p.casType;
@@ -377,7 +360,6 @@
     const spadedChip = needsSpadedNote(slot.unit)
       ? `<span class="spaded-chip" title="${esc(sp.title || "")}">${ico("i-info")} ${esc(sp.short || "Spaded")}</span>`
       : "";
-    const isOwned = ownedIds.has(slot.unit.id);
     return `
       <div class="slot-card" style="--cls-color:${meta.color}">
         <div class="slot-head">
@@ -386,16 +368,10 @@
         </div>
         <div class="veh-name">${esc(slot.unit.name)} ${srcBadges(slot.unit)} ${spadedChip}</div>
         <div class="veh-meta">${metaBits(slot, mode)}</div>
-        <div class="slot-actions">
-          <button type="button" class="own-btn${isOwned ? " is-owned" : ""}" data-own="${esc(slot.unit.id)}"
-            title="${isOwned ? "Marked as owned — click to unmark" : "Mark as owned (saved in this browser)"}">
-            ${ico("i-star")} ${isOwned ? "Owned" : "I own this"}
-          </button>
-          <button type="button" class="swap-btn" data-slot="${i}" ${alts ? "" : "disabled"}
-            title="Swap for the next-best ${meta.label.toLowerCase()} (respects your playstyle)">
-            ${ico("i-swap")} Swap${alts ? ` <span class="alt-count">${alts} more</span>` : ` <span class="alt-count">none left</span>`}
-          </button>
-        </div>
+        <button type="button" class="swap-btn" data-slot="${i}" ${alts ? "" : "disabled"}
+          title="Swap for the next-best ${meta.label.toLowerCase()} (respects your playstyle)">
+          ${ico("i-swap")} Swap${alts ? ` <span class="alt-count">${alts} more</span>` : ` <span class="alt-count">none left</span>`}
+        </button>
       </div>`;
   }
 
@@ -440,8 +416,7 @@
       <div class="lineup-grid">${result.slots.map((s, i) => slotCard(s, i, o.mode, result)).join("")}</div>
       <p class="pool-note spaded-note" title="${esc(LINEUP.SPADED?.title || "")}">${ico("i-info")} ${esc(LINEUP.SPADED?.note || "")}</p>
       <p class="pool-note">${result.poolSize} vehicles matched your filters in this bracket.
-        Star vehicles you own, then set <strong>My garage</strong> to Prefer/Only.
-        Use <strong>Swap</strong> to cycle candidates. Same settings always rebuild the same lineup.</p>`;
+        Use <strong>Swap</strong> to cycle candidates of that role. Same settings always rebuild the same lineup.</p>`;
   }
 
   // Advance one slot to the next available candidate of its role, in ranked
@@ -507,20 +482,8 @@
       tryGenerate();
     });
 
-    // Delegated: swap / own buttons are re-rendered on every update.
+    // Delegated: swap buttons are re-rendered on every update.
     $("results").addEventListener("click", e => {
-      const ownBtn = e.target.closest(".own-btn");
-      if (ownBtn) {
-        const id = ownBtn.dataset.own;
-        if (!id) return;
-        if (ownedIds.has(id)) ownedIds.delete(id);
-        else ownedIds.add(id);
-        saveOwned(ownedIds);
-        // Rebuild so ownership scoring takes effect immediately.
-        if (current) tryGenerate();
-        else ownBtn.classList.toggle("is-owned");
-        return;
-      }
       const btn = e.target.closest(".swap-btn");
       if (btn && !btn.disabled) swapSlot(parseInt(btn.dataset.slot, 10));
     });

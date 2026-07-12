@@ -66,11 +66,13 @@ body {
   line-height: 1.45;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  /* Page may scroll if the form is tall — the form itself never has an inner scrollbar. */
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 @media (max-width: 900px) {
-  body { overflow: auto; height: auto; min-height: 100vh; }
+  body { height: auto; min-height: 100vh; }
 }
 
 /* Icon helper — sized by font-size of context */
@@ -210,7 +212,8 @@ body {
 }
 
 /* Both panes scroll internally so the page never does. */
-.form-panel { min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+/* Form stays fully visible (no inner scrollbar). Results may scroll if tall. */
+.form-panel { min-height: 0; overflow: visible; }
 .results { min-height: 0; overflow-y: auto; scrollbar-width: thin; padding-right: 4px; }
 
 @media (max-width: 900px) {
@@ -379,17 +382,17 @@ input:focus {
 #bombersOnlyWrap { margin-top: 10px; }
 .cas-label { margin-bottom: 6px; }
 
-/* Playstyle cards */
+/* Playstyle cards — compact so the form fits without an inner scrollbar */
 
-.playstyles { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.playstyles { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
 
 .ps-card {
   position: relative;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 2px;
-  padding: 8px 10px 9px;
+  gap: 1px;
+  padding: 6px 8px 7px;
   background: var(--inset);
   border: 1px solid var(--line-2);
   border-radius: 8px;
@@ -420,8 +423,8 @@ input:focus {
 }
 .ps-card .ps-icon { display: inline-block; vertical-align: -0.15em; }
 .ps-desc {
-  font-size: 0.72rem;
-  line-height: 1.3;
+  font-size: 0.68rem;
+  line-height: 1.25;
   color: var(--text-faint);
   font-weight: 400;
   letter-spacing: 0;
@@ -468,37 +471,7 @@ input:focus {
 }
 .pool-note.spaded-note .ico { color: var(--gold); margin-top: 2px; flex-shrink: 0; }
 
-.slot-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: auto;
-}
-.own-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 7px 9px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--line-2);
-  background: var(--inset);
-  color: var(--text-dim);
-  font-family: var(--font-body);
-  font-size: 0.8rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: border-color 0.15s, color 0.15s, background 0.15s;
-}
-.own-btn:hover { border-color: var(--gold-dim); color: var(--text); }
-.own-btn.is-owned {
-  border-color: var(--gold-2);
-  background: rgba(233, 182, 74, 0.12);
-  color: var(--gold);
-}
-.own-btn .ico { color: inherit; }
-
-/* Generate button — sticky inside the (possibly scrolling) form panel so the
-   CTA is always reachable, even on short screens. */
+/* Generate button — sticky inside the form panel so the CTA stays reachable. */
 
 .generate-wrap {
   position: sticky;
@@ -776,8 +749,8 @@ input:focus {
   align-items: center;
   justify-content: center;
   gap: 7px;
-  flex: 1;
-  min-width: 7rem;
+  margin-top: auto;
+  width: 100%;
   padding: 7px 8px;
   background: var(--inset);
   border: 1px solid var(--line-2);

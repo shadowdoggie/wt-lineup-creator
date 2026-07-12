@@ -192,31 +192,9 @@ const LINEUP = (() => {
       return Math.max(0, Math.min(1, ratio * 0.65));
     };
 
-    // Ownership: ownedIds is a Set of vehicle ids the player marked as owned.
-    //   ownedMode "prefer" — big bonus for owned (default when any are marked)
-    //   ownedMode "only"   — filter to owned when the role has any owned candidates
-    //   ownedMode "ignore" — no ownership influence
-    // Tech-tree vehicles still get a tiny nudge when ownership is ignore/empty.
-    const owned = o.ownedIds instanceof Set ? o.ownedIds
-      : new Set(Array.isArray(o.ownedIds) ? o.ownedIds : []);
-    const ownedMode = o.ownedMode || "prefer";
-    const ownershipNudge = u => {
-      if (ownedMode === "ignore") {
-        return (!u.premium && !u.squadron && !u.gift) ? 0.12 : 0;
-      }
-      if (owned.has(u.id)) return 0.55;
-      // Soft penalty for unowned specials when prefer is on; tech tree mild bonus.
-      if (ownedMode === "prefer" && owned.size) {
-        if (u.premium || u.squadron || u.gift) return -0.08;
-        return 0.08;
-      }
-      return (!u.premium && !u.squadron && !u.gift) ? 0.12 : 0;
-    };
-    const filterOwned = arr => {
-      if (ownedMode !== "only" || !owned.size) return arr;
-      const kept = arr.filter(u => owned.has(u.id));
-      return kept.length ? kept : arr; // never empty a role if nothing owned there
-    };
+    // Mild tech-tree preference when scores are otherwise close (more likely owned).
+    const ownershipNudge = u =>
+      (!u.premium && !u.squadron && !u.gift) ? 0.12 : 0;
 
     // BR closeness is the dominant term (×2.0) so the generator optimizes for
     // the same thing the health panel measures. Class fit + stats still matter
@@ -317,15 +295,12 @@ const LINEUP = (() => {
     }
 
     const pools = {
-      ground: rankBy(filterOwned(mains), groundScore),
-      spaa: rankBy(filterOwned(spaas), spaaScore),
-      fighter: rankBy(filterOwned(fighterPool), fighterScore),
-      attacker: rankBy(filterOwned(casPlanes), attackerScore),
-      heli: rankBy(filterOwned(helis), heliScore),
+      ground: rankBy(mains, groundScore),
+      spaa: rankBy(spaas, spaaScore),
+      fighter: rankBy(fighterPool, fighterScore),
+      attacker: rankBy(casPlanes, attackerScore),
+      heli: rankBy(helis, heliScore),
     };
-    if (ownedMode === "only" && owned.size) {
-      warnings.push("Owned-only mode: ranking vehicles you've marked as owned (roles with none fall back to all).");
-    }
 
     // --- slot allocation ---
     // Plane / SPAA / heli counts: user can override the auto heuristics.
