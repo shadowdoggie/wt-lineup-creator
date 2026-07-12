@@ -56,8 +56,18 @@
       <div class="field">
         <label>Include in lineup</label>
         <label class="check"><input type="checkbox" id="incSPAA" checked> SPAA <span class="hint">(anti-air)</span></label>
-        <label class="check"><input type="checkbox" id="incPlanes" checked> Aircraft <span class="hint">(fighter / CAS)</span></label>
         <label class="check"><input type="checkbox" id="incHelis"> Helicopters</label>
+      </div>
+
+      <div class="field">
+        <label for="planeRole">Aircraft</label>
+        <select id="planeRole">
+          <option value="fighter">✈️ Fighter — air superiority</option>
+          <option value="attacker">💣 Ground pounder — CAS</option>
+          <option value="balanced" selected>⚔️ Balanced — both</option>
+          <option value="none">🚫 No aircraft</option>
+        </select>
+        <p class="hint">Fighters ranked by turn time; ground pounders by bomb/rocket payload.</p>
       </div>
 
       <div class="field">

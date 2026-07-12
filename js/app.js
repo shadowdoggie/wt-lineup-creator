@@ -1,7 +1,7 @@
 "use strict";
 
 /* UI wiring: loads data, keeps the BR dropdown in sync with nation + mode,
- * and renders generated lineups. */
+ * renders generated lineups, and handles per-slot vehicle swaps. */
 (() => {
   const $ = id => document.getElementById(id);
 
@@ -16,8 +16,15 @@
     bomber:   { label: "BOMBER", color: "var(--c-bomber)" },
     heli:     { label: "HELICOPTER", color: "var(--c-heli)" },
   };
+  // Plane slots badge by their assigned role; ground/SPAA by vehicle class.
+  const CATEGORY_BADGE = {
+    fighter:  { label: "FIGHTER", color: "var(--c-fighter)" },
+    attacker: { label: "CAS / STRIKE", color: "var(--c-attacker)" },
+    heli:     CLS_META.heli,
+  };
 
   const state = { units: [], mode: "realistic", fetchedAt: null };
+  let current = null; // { result, options } — kept so swaps can mutate the lineup
 
   /* ---------- data loading ---------- */
 
@@ -70,8 +77,8 @@
       .join("");
   }
 
-  // The BR dropdown only offers BRs that actually exist for the selected
-  // nation's ground vehicles in the selected mode.
+  // The BR dropdown only offers BRs that exist for this nation's ground
+  // vehicles in the selected mode.
   function refreshBROptions() {
     const sel = $("targetBR");
     const prev = parseFloat(sel.value);
@@ -96,8 +103,8 @@
       targetBR: parseFloat($("targetBR").value),
       slots: Math.max(1, Math.min(12, parseInt($("slots").value, 10) || 5)),
       incSPAA: $("incSPAA").checked,
-      incPlanes: $("incPlanes").checked,
       incHelis: $("incHelis").checked,
+      planeRole: $("planeRole").value,
       incPremium: $("incPremium").checked,
       incSquadron: $("incSquadron").checked,
       incGift: $("incGift").checked,
@@ -111,6 +118,11 @@
     return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
   }
 
+  function badgeFor(slot) {
+    return CATEGORY_BADGE[slot.category] || CLS_META[slot.unit.cls] ||
+      { label: slot.unit.cls.toUpperCase(), color: "var(--text-dim)" };
+  }
+
   function srcBadges(u) {
     let out = "";
     if (u.premium) out += `<span class="src-badge" title="Premium vehicle">⭐</span>`;
@@ -119,58 +131,78 @@
     return out;
   }
 
-  function armorLine(u) {
-    if (u.type !== "tank" || (u.armorHull == null && u.armorTurret == null)) return "";
-    const parts = [];
-    if (u.armorHull != null) parts.push(`Hull ${u.armorHull} mm`);
-    if (u.armorTurret != null) parts.push(`Turret ${u.armorTurret} mm`);
-    return `<span>${parts.join(" · ")}</span>`;
+  // Role-relevant stat line: hp/ton + armor for ground, turn time for
+  // fighters, payload for CAS.
+  function metaBits(slot, mode) {
+    const u = slot.unit;
+    const bits = [`<span class="br-chip">${u.br[mode].toFixed(1)}</span>`, `<span>Rank ${u.rank}</span>`];
+    if (u.type === "tank" && slot.category !== "spaa") {
+      if (u.hpPerTon != null) bits.push(`<span title="Real horsepower-per-ton">${u.hpPerTon} hp/t</span>`);
+      const armor = [];
+      if (u.armorHull != null) armor.push(`H ${u.armorHull}`);
+      if (u.armorTurret != null) armor.push(`T ${u.armorTurret}`);
+      if (armor.length) bits.push(`<span title="Frontal armor (mm)">🛡️ ${armor.join(" / ")}</span>`);
+    } else if (slot.category === "fighter") {
+      if (u.turnTime != null) bits.push(`<span title="Sustained turn time">↻ ${u.turnTime}s turn</span>`);
+    } else if (slot.category === "attacker") {
+      bits.push(u.payload > 0
+        ? `<span title="Bombs + rockets carried">💣 ${u.payload} ordnance</span>`
+        : `<span>guns only</span>`);
+    }
+    return bits.join(" ");
   }
 
-  function slotCard(u, i, mode) {
-    const meta = CLS_META[u.cls] || { label: u.cls.toUpperCase(), color: "var(--text-dim)" };
+  function slotCard(slot, i, mode, result) {
+    const meta = badgeFor(slot);
+    const pool = result.pools[slot.category] || [];
+    const alts = pool.filter(u => !result.used.has(u.id)).length; // others not in the lineup
     return `
       <div class="slot-card" style="--cls-color:${meta.color}">
         <div class="slot-head">
           <span class="slot-num">SLOT ${i + 1}</span>
           <span class="cls-badge">${meta.label}</span>
         </div>
-        <div class="veh-name">${esc(u.name)} ${srcBadges(u)}</div>
-        <div class="veh-meta">
-          <span class="br-chip">${u.br[mode].toFixed(1)}</span>
-          <span>Rank ${u.rank}</span>
-          ${armorLine(u)}
-        </div>
+        <div class="veh-name">${esc(slot.unit.name)} ${srcBadges(slot.unit)}</div>
+        <div class="veh-meta">${metaBits(slot, mode)}</div>
+        <button class="swap-btn" data-slot="${i}" ${alts ? "" : "disabled"}
+          title="Swap for the next-best ${meta.label.toLowerCase()} (respects your playstyle)">
+          ⟳ Swap${alts ? ` <span class="alt-count">${alts} more</span>` : " (none left)"}
+        </button>
       </div>`;
   }
 
-  function altChip(u, mode) {
-    const meta = CLS_META[u.cls] || { color: "var(--text-dim)" };
-    return `
-      <span class="alt-chip" style="--cls-color:${meta.color}">
-        <span class="br-chip">${u.br[mode].toFixed(1)}</span>
-        ${esc(u.name)} ${srcBadges(u)}
-      </span>`;
-  }
-
-  function renderResult(r, o) {
+  function renderResult(result, o) {
+    current = { result, options: o };
     const nationLabel = WT_DATA.NATIONS.find(n => n[0] === o.nation)?.[1] || o.nation;
     const modeLabel = { arcade: "Arcade", realistic: "Realistic", simulator: "Simulator" }[o.mode];
-    const altSection = (title, list) => list.length ? `
-      <div class="alt-section">
-        <h2>${title}</h2>
-        <div class="alt-chips">${list.map(u => altChip(u, o.mode)).join("")}</div>
-      </div>` : "";
-
     $("results").innerHTML = `
-      ${r.warnings.length ? `<div class="warnings">${r.warnings.map(w => `<div class="warning">⚠️ ${w}</div>`).join("")}</div>` : ""}
+      ${result.warnings.length ? `<div class="warnings">${result.warnings.map(w => `<div class="warning">⚠️ ${w}</div>`).join("")}</div>` : ""}
       <h2>${nationLabel} · BR ${(o.targetBR - LINEUP.BR_WINDOW).toFixed(1)}–${o.targetBR.toFixed(1)}
-        <span class="sub">· ${modeLabel} · ${r.slots.length} vehicles</span></h2>
-      <div class="lineup-grid">${r.slots.map((u, i) => slotCard(u, i, o.mode)).join("")}</div>
-      ${altSection("Ground alternatives", r.alternatives.ground)}
-      ${altSection("SPAA alternatives", r.alternatives.spaa)}
-      ${altSection("Air alternatives", r.alternatives.air)}
-      <p class="pool-note">${r.poolSize} vehicles matched your filters in this BR bracket. Same settings can give different picks — hit Generate again to reroll ties.</p>`;
+        <span class="sub">· ${modeLabel} · ${result.slots.length} vehicles</span></h2>
+      <div class="lineup-grid">${result.slots.map((s, i) => slotCard(s, i, o.mode, result)).join("")}</div>
+      <p class="pool-note">${result.poolSize} vehicles matched your filters in this bracket.
+        Use <strong>⟳ Swap</strong> on any slot to cycle to the next-best pick of that role — handy for
+        swapping a premium you don't own for one you do. Hit Generate to reroll from scratch.</p>`;
+  }
+
+  // Advance one slot to the next available candidate of its role, in ranked
+  // order (wrapping), skipping vehicles already in the lineup.
+  function swapSlot(i) {
+    if (!current) return;
+    const { result, options } = current;
+    const slot = result.slots[i];
+    const pool = result.pools[slot.category] || [];
+    if (pool.length < 2) return;
+    const curIdx = pool.findIndex(u => u.id === slot.unit.id);
+    for (let step = 1; step <= pool.length; step++) {
+      const cand = pool[(curIdx + step) % pool.length];
+      if (!cand || cand.id === slot.unit.id || result.used.has(cand.id)) continue;
+      result.used.delete(slot.unit.id);
+      result.used.add(cand.id);
+      slot.unit = cand;
+      renderResult(result, options); // re-render so every slot's "N more" stays correct
+      return;
+    }
   }
 
   /* ---------- events ---------- */
@@ -193,6 +225,12 @@
       const o = currentOptions();
       if (Number.isNaN(o.targetBR)) return;
       renderResult(LINEUP.generate(state.units, o), o);
+    });
+
+    // Delegated: swap buttons are re-rendered on every update.
+    $("results").addEventListener("click", e => {
+      const btn = e.target.closest(".swap-btn");
+      if (btn && !btn.disabled) swapSlot(parseInt(btn.dataset.slot, 10));
     });
 
     $("refreshBtn").addEventListener("click", () => loadData(true));

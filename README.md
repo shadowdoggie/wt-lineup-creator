@@ -8,10 +8,16 @@ A War Thunder lineup generator that pulls **live battle ratings and vehicle data
 - **Per-mode BRs** — Arcade, Realistic and Simulator battle ratings are all different; the generator uses the right one for your selected mode.
 - **Lineup generation** based on:
   - Number of crew slots
-  - Whether you want aircraft, helicopters and/or SPAA in the lineup
+  - SPAA and/or helicopters
+  - **Aircraft role**: Fighter (air superiority), Ground pounder (CAS), Balanced (both), or none
   - Playstyle preference: Balanced, Armor (brawler), Speed (flanker) or Sniper (tank destroyer focus)
   - Tech-tree only, or including premium / squadron / event vehicles
-- **Real stats** — playstyle scoring uses actual hull/turret armor thickness and vehicle class tags from the game files.
+- **Real stats drive the scoring:**
+  - **Armor** — actual frontal hull/turret plate thickness from the game files.
+  - **Speed** — real **horsepower-per-ton**, extracted from each tank's physics file (see `tools/build_mobility.py`).
+  - **Fighters** — ranked by sustained **turn time**.
+  - **Ground pounders** — ranked by **bomb/rocket payload**.
+- **Per-slot swap** — every slot has a ⟳ Swap button that cycles to the next-best vehicle of the same role (respecting your playstyle). Handy for swapping a premium you don't own for one you do.
 
 ## Live
 
@@ -34,7 +40,18 @@ then open http://localhost:8123. (Opening `index.html` directly via `file://` wo
 | `char.vromfs.bin_u/config/wpcost.blkx` | Economic ranks (→ battle ratings), nation, rank, premium/gift/event flags |
 | `char.vromfs.bin_u/config/unittags.blkx` | Vehicle type + class tags (`type_medium_tank`, `type_spaa`, …), armor thickness |
 | `lang.vromfs.bin_u/lang/units.csv` | Localized display names |
+| `aces.vromfs.bin_u/gamedata/units/tankmodels/<id>.blkx` | Engine hp + mass → hp/ton (fetched offline by `tools/build_mobility.py`) |
 
 Battle rating is derived from the game's economic rank: `BR = economicRank / 3 + 1.0`.
+
+Most data is fetched live in the browser. The one exception is tank hp/ton: the
+economy file caps its `speed` field, and real mobility lives in ~1,200 separate
+physics files — too many to fetch at runtime. So `tools/build_mobility.py` pulls
+them once and writes `data/mobility.json`, which ships with the app. hp/ton
+changes very rarely, so re-run that script only after a major patch:
+
+```
+python tools/build_mobility.py
+```
 
 Not affiliated with Gaijin Entertainment.

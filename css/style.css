@@ -252,20 +252,21 @@ select:focus, input:focus { outline: none; border-color: var(--gold-dim); }
 }
 .src-badge { font-size: 0.78rem; }
 
-.alt-section { margin-bottom: 20px; }
-.alt-chips { display: flex; flex-wrap: wrap; gap: 7px; }
-.alt-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  background: var(--panel);
+.swap-btn {
+  margin-top: 10px;
+  width: 100%;
+  padding: 6px 8px;
+  background: var(--bg-2);
   border: 1px solid var(--border);
-  border-left: 3px solid var(--cls-color, var(--border));
   border-radius: 6px;
-  padding: 5px 10px;
-  font-size: 0.82rem;
+  color: var(--text);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
 }
-.alt-chip .br-chip { font-size: 0.72rem; }
+.swap-btn:hover:not(:disabled) { border-color: var(--cls-color, var(--gold-dim)); background: var(--panel-2); }
+.swap-btn:disabled { opacity: 0.4; cursor: default; }
+.swap-btn .alt-count { color: var(--text-dim); font-size: 0.72rem; }
 
 .pool-note { color: var(--text-dim); font-size: 0.78rem; margin-top: 10px; }
 

@@ -13,7 +13,11 @@ const WT_DATA = (() => {
     unittags: "char.vromfs.bin_u/config/unittags.blkx",
     names:    "lang.vromfs.bin_u/lang/units.csv",
   };
-  const CACHE_KEY = "wtlc_data_v1";
+  const CACHE_KEY = "wtlc_data_v2";
+  // Real tank hp/ton, precomputed by tools/build_mobility.py and shipped with
+  // the app (see data.js header). Served from our own origin, merged at load
+  // time so refreshing it doesn't require busting the vehicle cache.
+  const MOBILITY_URL = "data/mobility.json";
   // Fallback re-download interval, used only when the commit check fails
   // (offline, or GitHub API rate limit of 60 req/h per IP exhausted).
   const MAX_AGE_MS = 24 * 3600 * 1000;
@@ -52,6 +56,21 @@ const WT_DATA = (() => {
     ["type_dive_bomber", "attacker"],
     ["type_bomber", "bomber"],
   ];
+
+  // Best ground-attack loadout across a plane's weapon presets: how many
+  // bombs/rockets/torpedoes it can carry. A rough but effective CAS signal
+  // without opening every individual weapon file.
+  function payloadCount(w) {
+    let best = 0;
+    for (const preset of Object.values(w.weapons || {})) {
+      let n = 0;
+      for (const [name, count] of Object.entries(preset.sum_weapons || {})) {
+        if (/bomb|rocket|torpedo/i.test(name)) n += count;
+      }
+      if (n > best) best = n;
+    }
+    return best;
+  }
 
   function classify(type, tags) {
     if (type === "tank") {
@@ -125,6 +144,10 @@ const WT_DATA = (() => {
         gift: !!(w.gift || w.event || w.showOnlyWhenBought),
         armorHull: Array.isArray(shop.armorThicknessHull) ? shop.armorThicknessHull[0] : null,
         armorTurret: Array.isArray(shop.armorThicknessTurret) ? shop.armorThicknessTurret[0] : null,
+        hpPerTon: null, // filled from mobility.json after load
+        // Aircraft-only: lower turnTime = better dogfighter; payload = CAS punch.
+        turnTime: air && typeof shop.turnTime === "number" ? shop.turnTime : null,
+        payload: type === "aircraft" ? payloadCount(w) : 0,
       });
     }
     return units;
@@ -167,6 +190,19 @@ const WT_DATA = (() => {
     return { sha: c.sha, date: c.commit?.committer?.date || null };
   }
 
+  // Merge precomputed hp/ton onto tank units. Done every load (not baked into
+  // the cache) so shipping a new mobility.json takes effect immediately.
+  async function attachMobility(units) {
+    try {
+      const res = await fetch(MOBILITY_URL);
+      if (!res.ok) return;
+      const mob = await res.json();
+      for (const u of units) if (u.type === "tank") u.hpPerTon = mob[u.id] ?? null;
+    } catch {
+      // No mobility file: Speed playstyle falls back to the armor-inverse proxy.
+    }
+  }
+
   /**
    * Loads unit data. Re-downloads whenever the datamine mirror has a new
    * commit (i.e. the game files changed); otherwise serves the local cache.
@@ -182,8 +218,14 @@ const WT_DATA = (() => {
     }
 
     if (cache && !force) {
-      if (head && cache.sha === head.sha) return { ...cache, fromCache: true, upToDate: true };
-      if (!head && Date.now() - cache.fetchedAt < MAX_AGE_MS) return { ...cache, fromCache: true };
+      if (head && cache.sha === head.sha) {
+        await attachMobility(cache.units);
+        return { ...cache, fromCache: true, upToDate: true };
+      }
+      if (!head && Date.now() - cache.fetchedAt < MAX_AGE_MS) {
+        await attachMobility(cache.units);
+        return { ...cache, fromCache: true };
+      }
     }
 
     try {
@@ -201,6 +243,7 @@ const WT_DATA = (() => {
         units: buildUnits(wpcost, unittags, parseNames(namesCsv)),
       };
       writeCache(fresh);
+      await attachMobility(fresh.units);
       return { ...fresh, fromCache: false, upToDate: !!head };
     } catch (err) {
       // Offline / rate-limited: fall back to stale cache rather than a dead app.
