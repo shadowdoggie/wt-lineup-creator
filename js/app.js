@@ -44,6 +44,7 @@
       overlay.hidden = true;
       $("generateBtn").disabled = false;
       renderDataStatus(res);
+      renderDataWarnings(res.dataWarnings);
       refreshBROptions();
     } catch (err) {
       errEl.textContent = "Could not download game data: " + err.message +
@@ -51,6 +52,16 @@
       errEl.hidden = false;
       $("dataStatusText").textContent = "No data";
     }
+  }
+
+  // Loud banner for data-integrity problems (see WT_DATA.sanityCheck): if the
+  // datamine format shifts under us, show it instead of silently building a
+  // broken lineup. Empty in the normal case, so it stays out of the way.
+  function renderDataWarnings(warnings) {
+    const el = $("dataWarnings");
+    if (!warnings || !warnings.length) { el.hidden = true; el.innerHTML = ""; return; }
+    el.innerHTML = `<strong>⚠️ Data check:</strong> ${warnings.map(esc).join(" ")}`;
+    el.hidden = false;
   }
 
   function renderDataStatus(res) {
@@ -131,8 +142,14 @@
     return out;
   }
 
-  // Role-relevant stat line: hp/ton + armor for ground, turn time for
-  // fighters, payload for CAS.
+  // ATGM badge for a CAS jet or attack heli, with standoff range when known.
+  function atgmBadge(u) {
+    const km = u.atgmRange ? ` ~${(u.atgmRange / 1000).toFixed(u.atgmRange < 10000 ? 1 : 0)}km` : "";
+    return `<span title="Carries anti-ground guided missiles${km ? " · standoff range" : ""}">🚀 ATGM${km}</span>`;
+  }
+
+  // Role-relevant stat line: hp/ton + armor + gun for ground, radar/SAM/caliber
+  // for SPAA, turn time for fighters, ordnance + ATGMs for CAS and helis.
   function metaBits(slot, mode) {
     const u = slot.unit;
     const bits = [`<span class="br-chip">${u.br[mode].toFixed(1)}</span>`, `<span>Rank ${u.rank}</span>`];
@@ -143,12 +160,16 @@
       if (u.armorTurret != null) armor.push(`T ${u.armorTurret}`);
       if (armor.length) bits.push(`<span title="Frontal armor (mm)">🛡️ ${armor.join(" / ")}</span>`);
       if (u.gunVel != null) bits.push(`<span title="Fastest AP shell muzzle velocity${u.gunCal ? ` · ${u.gunCal}mm bore` : ""}">🎯 ${u.gunVel} m/s</span>`);
+    } else if (slot.category === "spaa") {
+      if (u.sam) bits.push(`<span title="Carries surface-to-air missiles">🚀 SAM</span>`);
+      if (u.radar) bits.push(`<span title="Has a tracking radar">📡 radar</span>`);
+      if (u.aaCal) bits.push(`<span title="Main gun caliber">🎯 ${u.aaCal}mm</span>`);
     } else if (slot.category === "fighter") {
       if (u.turnTime != null) bits.push(`<span title="Sustained turn time">↻ ${u.turnTime}s turn</span>`);
-    } else if (slot.category === "attacker") {
-      bits.push(u.payload > 0
-        ? `<span title="Bombs + rockets carried">💣 ${u.payload} ordnance</span>`
-        : `<span>guns only</span>`);
+    } else if (slot.category === "attacker" || slot.category === "heli") {
+      if (u.atgm) bits.push(atgmBadge(u));
+      if (u.ordnanceKg > 0) bits.push(`<span title="Bomb + rocket ordnance (guided bombs weighted double)">💣 ${u.ordnanceKg.toLocaleString()} kg</span>`);
+      if (!u.atgm && u.ordnanceKg === 0) bits.push(`<span>guns only</span>`);
     }
     return bits.join(" ");
   }

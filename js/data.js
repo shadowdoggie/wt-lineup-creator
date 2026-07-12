@@ -13,16 +13,41 @@ const WT_DATA = (() => {
     unittags: "char.vromfs.bin_u/config/unittags.blkx",
     names:    "lang.vromfs.bin_u/lang/units.csv",
   };
-  const CACHE_KEY = "wtlc_data_v2";
+  // Where the raw datamine files come from, tried in order. jsDelivr mirrors the
+  // same GitHub repo over a CDN, so it's a genuine fallback when raw.github is
+  // unreachable or the (separate) GitHub API is rate-limited.
+  const MIRRORS = [
+    ref => `https://raw.githubusercontent.com/${REPO}/${ref}/`,
+    ref => `https://cdn.jsdelivr.net/gh/${REPO}@${ref}/`,
+  ];
   // Real tank stats precomputed by tools/build_mobility.py and shipped with the
-  // app: hp/ton (mobility) and best-AP-shell muzzle velocity + bore caliber
-  // (gun). Served from our own origin, merged at load time so refreshing them
-  // doesn't require busting the vehicle cache.
+  // app: hp/ton (mobility), best-AP-shell muzzle velocity + bore caliber (gun),
+  // and SPAA anti-air capability (SAM/radar/caliber). Served from our own
+  // origin, merged at load time so refreshing them doesn't bust the vehicle cache.
   const MOBILITY_URL = "data/mobility.json";
   const GUNSTATS_URL = "data/gunstats.json";
+  const SPAA_URL = "data/spaa.json";
   // Fallback re-download interval, used only when the commit check fails
   // (offline, or GitHub API rate limit of 60 req/h per IP exhausted).
   const MAX_AGE_MS = 24 * 3600 * 1000;
+  // Roughly how many crewable vehicles we expect to parse. The game files only
+  // ever grow, so parsing far fewer than this means the format shifted under us.
+  const EXPECT_MIN_UNITS = 1500;
+
+  const num = v => (typeof v === "number" ? v : 0);
+
+  // Cache key is derived from a fingerprint of the fields buildUnits emits, so
+  // any change to the unit shape automatically invalidates stale caches — no
+  // more remembering to bump a manual "_v2". Add new fields to this string.
+  const SCHEMA = "id name country type cls rank br premium squadron gift " +
+    "armorHull armorTurret hpPerTon gunVel gunCal turnTime ordnanceKg atgm " +
+    "atgmRange sam radar aaCal";
+  function hash32(s) {
+    let h = 2166136261;
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return (h >>> 0).toString(36);
+  }
+  const CACHE_KEY = "wtlc_" + hash32(SCHEMA);
 
   const NATIONS = [
     ["usa", "🇺🇸 USA"],
@@ -59,19 +84,33 @@ const WT_DATA = (() => {
     ["type_bomber", "bomber"],
   ];
 
-  // Best ground-attack loadout across a plane's weapon presets: how many
-  // bombs/rockets/torpedoes it can carry. A rough but effective CAS signal
-  // without opening every individual weapon file.
-  function payloadCount(w) {
-    let best = 0;
+  // Ground-attack firepower for a plane or helicopter. wpcost pre-aggregates
+  // each weapon preset's ordnance, so we can weigh real tonnage and guided
+  // munitions — the things the old raw bomb-count ignored — without opening any
+  // weapon file:
+  //   totalBombRocketMass / totalNapalmBombMass / totalTorpedoMass — unguided kg
+  //   totalGuidedBombMass  — precision bombs (counted double: they hit)
+  //   atgmVisibilityType    — the preset carries anti-ground guided missiles
+  //   atgmMaxDistance       — ATGM standoff range (m), a heli-vs-heli tiebreak
+  // Returns the heaviest preset's real ground-ordnance mass (guided bombs count
+  // double — they actually hit) plus whether the plane can bring ATGMs and at
+  // what range. The scorer blends these; kept separate here so the UI can show
+  // an honest kg figure instead of a padded score.
+  function airFirepower(w) {
+    let ordnanceKg = 0, hasATGM = false, atgmRange = 0;
     for (const preset of Object.values(w.weapons || {})) {
-      let n = 0;
-      for (const [name, count] of Object.entries(preset.sum_weapons || {})) {
-        if (/bomb|rocket|torpedo/i.test(name)) n += count;
+      const kg =
+        num(preset.totalBombRocketMass) +
+        num(preset.totalNapalmBombMass) +
+        num(preset.totalTorpedoMass) * 0.5 +
+        num(preset.totalGuidedBombMass) * 2;
+      if (kg > ordnanceKg) ordnanceKg = kg;
+      if ("atgmVisibilityType" in preset) {
+        hasATGM = true;
+        atgmRange = Math.max(atgmRange, num(preset.atgmMaxDistance));
       }
-      if (n > best) best = n;
     }
-    return best;
+    return { ordnanceKg: Math.round(ordnanceKg), atgm: hasATGM, atgmRange: Math.round(atgmRange) };
   }
 
   function classify(type, tags) {
@@ -129,6 +168,9 @@ const WT_DATA = (() => {
 
       const air = type !== "tank";
       const shop = t.Shop || {};
+      // Both aircraft and helicopters carry ground-attack ordnance (a heli's
+      // whole reason for existing is its ATGMs), so score firepower for both.
+      const fire = air ? airFirepower(w) : null;
       units.push({
         id,
         name: names[id] || prettifyId(id),
@@ -149,9 +191,15 @@ const WT_DATA = (() => {
         hpPerTon: null, // filled from mobility.json after load
         gunVel: null,   // filled from gunstats.json after load (best AP shell m/s)
         gunCal: null,   // bore caliber (mm)
-        // Aircraft-only: lower turnTime = better dogfighter; payload = CAS punch.
+        sam: false,     // SPAA-only, filled from spaa.json: carries surface-to-air missiles
+        radar: false,   // SPAA-only: has a tracking radar
+        aaCal: null,    // SPAA-only: main gun caliber (mm)
+        // Fighters: lower turnTime = better dogfighter. Air/heli: real
+        // ground-ordnance weight (kg) + whether it can bring ATGMs.
         turnTime: air && typeof shop.turnTime === "number" ? shop.turnTime : null,
-        payload: type === "aircraft" ? payloadCount(w) : 0,
+        ordnanceKg: fire ? fire.ordnanceKg : 0,
+        atgm: fire ? fire.atgm : false,
+        atgmRange: fire ? fire.atgmRange : 0,
       });
     }
     return units;
@@ -177,31 +225,78 @@ const WT_DATA = (() => {
   }
 
   async function fetchSource(key, ref, onStep) {
-    const res = await fetch(`https://raw.githubusercontent.com/${REPO}/${ref}/${PATHS[key]}`);
-    if (!res.ok) throw new Error(`Failed to download ${key} (HTTP ${res.status})`);
-    const body = key === "names" ? await res.text() : await res.json();
-    onStep?.(key);
-    return body;
+    let lastErr;
+    for (const base of MIRRORS) {
+      try {
+        const res = await fetch(base(ref) + PATHS[key]);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const body = key === "names" ? await res.text() : await res.json();
+        onStep?.(key);
+        return body;
+      } catch (e) {
+        lastErr = e; // try the next mirror before giving up
+      }
+    }
+    throw new Error(`Failed to download ${key} (${lastErr?.message || "network error"})`);
   }
 
   // Latest datamine commit = current version of the game files. The mirror
   // updates within hours of every patch/BR change, so comparing this against
-  // the cached commit tells us whether Gaijin changed anything.
+  // the cached commit tells us whether Gaijin changed anything. Only the GitHub
+  // API is rate-limited (60 req/h/IP); the raw file download uses a different
+  // host, so a rate-limited freshness check just falls back to cached data.
   async function fetchCommitInfo() {
     const res = await fetch(COMMIT_API, { headers: { Accept: "application/vnd.github+json" } });
-    if (!res.ok) throw new Error(`GitHub API HTTP ${res.status}`);
+    if (!res.ok) {
+      const limited = res.status === 403 || res.status === 429;
+      throw new Error(limited ? "GitHub API rate limit" : `GitHub API HTTP ${res.status}`);
+    }
     const c = await res.json();
     return { sha: c.sha, date: c.commit?.committer?.date || null };
   }
 
-  // Merge precomputed hp/ton and gun stats onto tank units. Done every load
-  // (not baked into the cache) so shipping new data files takes effect
-  // immediately. Each file is optional and fails soft to a fallback.
+  // Loud sanity checks against silent datamine breakage. If Gaijin renames a
+  // field/tag or the mirror serves something unexpected, counts collapse — we
+  // want a visible banner, not a quietly-broken lineup. Thresholds are generous
+  // (the game only grows), so these fire on real breakage, not normal drift.
+  function sanityCheck(units, coverage) {
+    const warnings = [];
+    if (units.length < EXPECT_MIN_UNITS) {
+      warnings.push(`Only ${units.length.toLocaleString()} vehicles parsed (expected ` +
+        `${EXPECT_MIN_UNITS.toLocaleString()}+). The datamine format may have changed — ` +
+        `lineups could be incomplete.`);
+    }
+    const emptyNations = NATIONS.filter(([id]) => !units.some(u => u.country === id))
+      .map(([, label]) => label.replace(/^\S+\s/, ""));
+    if (emptyNations.length) {
+      warnings.push(`No vehicles found for ${emptyNations.join(", ")} — a nation tag may have ` +
+        `been renamed upstream.`);
+    }
+    const tanks = units.filter(u => u.type === "tank");
+    if (tanks.length) {
+      const withArmor = tanks.filter(u => u.armorHull != null).length;
+      if (withArmor / tanks.length < 0.5) {
+        warnings.push(`Armor data is missing for ${Math.round((1 - withArmor / tanks.length) * 100)}% ` +
+          `of tanks this patch — armor-based ranking will be degraded.`);
+      }
+    }
+    // Precomputed stat files: a null means the fetch failed (missing/renamed).
+    if (coverage.mobility === null) warnings.push("Mobility data (mobility.json) didn't load — the Speed playstyle is using a rough fallback.");
+    if (coverage.guns === null) warnings.push("Gun data (gunstats.json) didn't load — the Sniper playstyle is using a rough fallback.");
+    if (coverage.spaa === null) warnings.push("SPAA data (spaa.json) didn't load — anti-air is ranked by battle rating only.");
+    return warnings;
+  }
+
+  // Merge precomputed hp/ton, gun, and SPAA stats onto tank units. Done every
+  // load (not baked into the cache) so shipping new data files takes effect
+  // immediately. Each file is optional and fails soft to a fallback. Returns a
+  // coverage report so the caller can flag a file that went missing/empty.
   async function attachStats(units) {
     const tanks = units.filter(u => u.type === "tank");
-    const [mob, guns] = await Promise.all([
+    const [mob, guns, spaa] = await Promise.all([
       fetchJsonSoft(MOBILITY_URL),
       fetchJsonSoft(GUNSTATS_URL),
+      fetchJsonSoft(SPAA_URL),
     ]);
     // No mobility file: Speed playstyle falls back to the armor-inverse proxy.
     if (mob) for (const u of tanks) u.hpPerTon = mob[u.id] ?? null;
@@ -210,6 +305,16 @@ const WT_DATA = (() => {
       const g = guns[u.id];
       if (g) { u.gunVel = g.v ?? null; u.gunCal = g.c ?? null; }
     }
+    // No SPAA file: anti-air scoring falls back to BR closeness only.
+    if (spaa) for (const u of tanks) {
+      const s = spaa[u.id];
+      if (s) { u.sam = !!s.sam; u.radar = !!s.radar; u.aaCal = s.cal || null; }
+    }
+    return {
+      mobility: mob ? Object.keys(mob).length : null,
+      guns: guns ? Object.keys(guns).length : null,
+      spaa: spaa ? Object.keys(spaa).length : null,
+    };
   }
 
   async function fetchJsonSoft(url) {
@@ -226,6 +331,14 @@ const WT_DATA = (() => {
    * commit (i.e. the game files changed); otherwise serves the local cache.
    * `onStep(key)` fires per finished file.
    */
+  // Attach precomputed stats and run sanity checks, folding the result into the
+  // returned payload. Every return path in load() goes through here so the UI
+  // always gets a dataWarnings array.
+  async function finalize(payload) {
+    const coverage = await attachStats(payload.units);
+    return { ...payload, dataWarnings: sanityCheck(payload.units, coverage) };
+  }
+
   async function load({ force = false, onStep } = {}) {
     const cache = readCache();
     let head = null;
@@ -237,12 +350,10 @@ const WT_DATA = (() => {
 
     if (cache && !force) {
       if (head && cache.sha === head.sha) {
-        await attachStats(cache.units);
-        return { ...cache, fromCache: true, upToDate: true };
+        return finalize({ ...cache, fromCache: true, upToDate: true });
       }
       if (!head && Date.now() - cache.fetchedAt < MAX_AGE_MS) {
-        await attachStats(cache.units);
-        return { ...cache, fromCache: true };
+        return finalize({ ...cache, fromCache: true });
       }
     }
 
@@ -261,11 +372,10 @@ const WT_DATA = (() => {
         units: buildUnits(wpcost, unittags, parseNames(namesCsv)),
       };
       writeCache(fresh);
-      await attachStats(fresh.units);
-      return { ...fresh, fromCache: false, upToDate: !!head };
+      return finalize({ ...fresh, fromCache: false, upToDate: !!head });
     } catch (err) {
       // Offline / rate-limited: fall back to stale cache rather than a dead app.
-      if (cache) return { ...cache, fromCache: true, stale: true };
+      if (cache) return finalize({ ...cache, fromCache: true, stale: true });
       throw err;
     }
   }

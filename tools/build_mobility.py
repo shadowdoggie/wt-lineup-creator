@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Precomputes two static tables the app ships with, both derived from each tank's
+Precomputes three static tables the app ships with, all derived from each tank's
 model file under
     aces.vromfs.bin_u/gamedata/units/tankmodels/<id>.blkx
 (far too many files to fetch in the browser at runtime):
@@ -17,6 +17,15 @@ model file under
                         needs one extra hop per gun: tankmodel -> commonWeapons
                         cannon .blk -> shell definitions (weapon files are cached
                         since many vehicles share a gun).
+  data/spaa.json      — id -> {"sam": 0/1, "radar": 0/1, "cal": mm} for SPAA
+                        only. Lets the app rank anti-air by real capability
+                        (a radar SAM launcher vs a WWII quad-MG) instead of
+                        all-or-nothing. Read straight off the same tankmodel:
+                        a surface-to-air missile launcher, a tracking-radar
+                        sensor block, and the largest gun caliber.
+        (Aircraft/heli firepower needs no precompute — wpcost pre-aggregates
+        ordnance mass and ATGM presence per weapon preset, so the browser scores
+        CAS directly.)
 
 Run after a major patch that reworks engines/weights/guns:
 
@@ -44,11 +53,18 @@ MOBILITY_OUT = os.environ.get(
     os.path.join(os.path.dirname(__file__), "..", "data", "mobility.json"),
 )
 GUNSTATS_OUT = os.path.join(os.path.dirname(os.path.abspath(MOBILITY_OUT)), "gunstats.json")
+SPAA_OUT = os.path.join(os.path.dirname(os.path.abspath(MOBILITY_OUT)), "spaa.json")
 
 # Kinetic armour-piercing shell family (apbc / apcbc / aphebc / apcr / apds /
 # apfsds). Excludes heat / he / smoke / shrapnel — chemical and filler rounds
 # aren't what a sniping gun is judged on.
 AP_RE = re.compile(r"ap", re.I)
+
+# Gun caliber embedded in a weapon .blk filename, e.g. "23mm_2A7_user_cannon"
+# or the underscore-decimal "37mm" / "12_7mm". Reading it off the name avoids
+# opening the file — handy for autocannons, whose belt-fed shells don't appear
+# in the top-level shell slots _shell_slots looks at.
+CAL_RE = re.compile(r"(?:^|[_/])(\d+(?:_\d+)?)mm")
 
 # Weapon .blk files are shared across many vehicles (dozens of Shermans use the
 # same 75mm), so cache them to roughly halve the extra fetches.
@@ -59,6 +75,9 @@ _weapon_lock = threading.Lock()
 # cannon .blk lists every shell the gun model can ever fire; a given vehicle
 # can only equip its stock round plus the shells matching one of its mods.
 _mods_by_id = {}
+
+# Which tank ids are SPAA (from unittags). Only these get an spaa.json entry.
+_spaa_ids = set()
 
 
 def get(url):
@@ -149,11 +168,49 @@ def _gun_stats_from_model(model, mods):
     return None  # missile / HE-only / autocannon vehicles have no AP round
 
 
+def _spaa_stats_from_model(model):
+    """Anti-air firepower descriptor for an SPAA, all from its tankmodel:
+      sam   — carries a surface-to-air missile launcher
+      radar — has a tracking-radar sensor block
+      cal   — largest gun caliber (mm); missile-launcher diameters excluded
+    A radar SAM launcher and a towed quad-MG both tag as `type_spaa`; this is
+    what tells them apart."""
+    common = model.get("commonWeapons") or {}
+    weps = common.get("Weapon") if isinstance(common, dict) else common
+    weps = weps if isinstance(weps, list) else [weps]
+
+    sam = False
+    cal = 0.0
+    for w in weps:
+        if not (isinstance(w, dict) and isinstance(w.get("blk"), str)):
+            continue
+        blk = w["blk"].lower()
+        if "rocket_launcher" in blk or "missile" in blk:
+            sam = True  # its "caliber" is the missile diameter — don't count it
+            continue
+        if "dummy" in blk or "machinegun" in blk:
+            continue  # MGs aren't the AA gun that defines the vehicle
+        m = CAL_RE.search(blk.rsplit("/", 1)[-1])
+        if not m:
+            continue
+        bore = float(m.group(1).replace("_", "."))
+        # Many SAMs (Roland, Chaparral, ADATS, NASAMS, HQ-11…) are modeled as a
+        # `_cannon` whose "caliber" is the missile's body diameter. Real AA guns
+        # in the game top out at 80mm; every SPAA weapon of 85mm+ is a missile,
+        # so treat those as a launcher, not a gun.
+        if bore >= 85:
+            sam = True
+        else:
+            cal = max(cal, bore)
+    radar = bool(model.get("sensors"))
+    return {"sam": int(sam), "radar": int(radar), "cal": round(cal, 1)}
+
+
 def fetch_vehicle(unit_id):
-    """One tankmodel fetch yields both hp/ton and gun stats."""
+    """One tankmodel fetch yields hp/ton, gun stats, and (for SPAA) AA stats."""
     model = get_json_ci(f"gamedata/units/tankmodels/{unit_id}.blk")
     if model is None:
-        return unit_id, None, None
+        return unit_id, None, None, None
 
     vp = model.get("VehiclePhys", {})
     hp = vp.get("engine", {}).get("horsePowers")
@@ -161,7 +218,25 @@ def fetch_vehicle(unit_id):
     hpt = round(hp / (mass_kg / 1000.0), 1) if hp and mass_kg else None
 
     gun = _gun_stats_from_model(model, _mods_by_id.get(unit_id, frozenset()))
-    return unit_id, hpt, gun
+    spaa = _spaa_stats_from_model(model) if unit_id in _spaa_ids else None
+    return unit_id, hpt, gun, spaa
+
+
+def _guard_regression(label, new_count, path):
+    """Refuse to overwrite an existing table if the fresh run resolved far fewer
+    entries than the file already on disk — a >50% drop almost always means a
+    datamine field/structure got renamed, not that half the vehicles vanished."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            old_count = len(json.load(f))
+    except (OSError, ValueError):
+        return  # no prior file to compare against — first run
+    if old_count and new_count < 0.5 * old_count:
+        raise SystemExit(
+            f"{label}: only {new_count} entries vs {old_count} last run "
+            f"(>50% drop) — refusing to overwrite {path}. The datamine format "
+            f"likely changed; inspect before rebuilding."
+        )
 
 
 def _atomic_write(path, obj):
@@ -186,35 +261,48 @@ def main():
     _mods_by_id.update(
         {k: frozenset(wpcost[k].get("modifications", {}) or {}) for k in tanks}
     )
-    print(f"{len(tanks)} tanks — fetching model + gun files…")
+    _spaa_ids.update(
+        k for k in tanks if unittags.get(k, {}).get("tags", {}).get("type_spaa")
+    )
+    print(f"{len(tanks)} tanks ({len(_spaa_ids)} SPAA) — fetching model + gun files…")
 
-    mobility, guns = {}, {}
+    mobility, guns, spaa = {}, {}, {}
     mob_miss, gun_miss = [], []
     done = 0
     with cf.ThreadPoolExecutor(max_workers=24) as ex:
-        for uid, hpt, gun in ex.map(fetch_vehicle, tanks):
+        for uid, hpt, gun, aa in ex.map(fetch_vehicle, tanks):
             done += 1
             (mobility.__setitem__(uid, hpt) if hpt is not None else mob_miss.append(uid))
             (guns.__setitem__(uid, gun) if gun is not None else gun_miss.append(uid))
+            if aa is not None:
+                spaa[uid] = aa
             if done % 200 == 0:
                 print(f"  {done}/{len(tanks)}")
 
-    # Refuse to clobber good files if a network hiccup left us with almost
-    # nothing (the daily cron writes into the live web root). Gun misses are
-    # partly legitimate (missile/HE-only vehicles), so only guard mobility hard.
+    # Refuse to clobber good files if a structure change or network hiccup left
+    # us with far less than last time (the daily cron writes into the live web
+    # root). Mobility is guarded against the tank count; guns and SPAA are
+    # partly-legit misses (missile/HE-only vehicles), so they're guarded against
+    # the PREVIOUS run's counts — a sudden collapse means the schema moved.
     if len(mobility) < 0.5 * len(tanks):
         raise SystemExit(
             f"Only {len(mobility)}/{len(tanks)} tanks resolved — refusing to "
             f"overwrite {MOBILITY_OUT}. Likely a network issue; leaving old files."
         )
+    _guard_regression("gunstats", len(guns), GUNSTATS_OUT)
+    _guard_regression("spaa", len(spaa), SPAA_OUT)
 
     _atomic_write(MOBILITY_OUT, dict(sorted(mobility.items())))
     _atomic_write(GUNSTATS_OUT, dict(sorted(guns.items())))
+    _atomic_write(SPAA_OUT, dict(sorted(spaa.items())))
 
     print(f"\nWrote {len(mobility)} entries to {os.path.basename(MOBILITY_OUT)} "
           f"({len(mob_miss)} without physics data)")
     print(f"Wrote {len(guns)} entries to {os.path.basename(GUNSTATS_OUT)} "
           f"({len(gun_miss)} without an AP round — will use fallback)")
+    sam_n = sum(v["sam"] for v in spaa.values())
+    print(f"Wrote {len(spaa)}/{len(_spaa_ids)} SPAA entries to "
+          f"{os.path.basename(SPAA_OUT)} ({sam_n} with SAMs)")
     if gun_miss:
         print("No-AP vehicles:", ", ".join(gun_miss[:15]) + (" …" if len(gun_miss) > 15 else ""))
 

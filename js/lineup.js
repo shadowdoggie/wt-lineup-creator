@@ -90,23 +90,43 @@ const LINEUP = (() => {
     const groundScore = u =>
       brScore(u.br[o.mode], o.targetBR) * 1.1 + (ps.classW[u.cls] || 0.5) * 1.4 + ps.stat(u, p) * 1.4;
 
+    // Ground-attack firepower = real ordnance weight with a big premium for
+    // ATGMs (guided tank-killers punch far above their mass). Blended here so
+    // the stored ordnanceKg stays an honest display figure.
+    const firepower = u => u.ordnanceKg + (u.atgm ? 2500 : 0);
+
     const turnPctRaw = percentiler(planes, u => u.turnTime);
-    const payPctRaw = percentiler(planes, u => u.payload);
+    const payPctRaw = percentiler(planes, firepower);
     const turnQuality = u => 1 - (turnPctRaw(u) ?? 0.7); // lower turn time is better
     const fighterScore = u =>
       brScore(u.br[o.mode], o.targetBR) * 1.2 + turnQuality(u) * 1.4 + (u.cls === "fighter" ? 0.4 : 0);
+    // CAS by real firepower — a modern ATGM/guided-bomb jet no longer scores
+    // like a WWII light bomber that happens to carry more small bombs.
     const attackerScore = u =>
       brScore(u.br[o.mode], o.targetBR) * 1.2 + (payPctRaw(u) ?? 0) * 1.4 +
       (u.cls === "attacker" || u.cls === "bomber" ? 0.4 : 0);
-    const supportScore = u => brScore(u.br[o.mode], o.targetBR);
+
+    // Helicopters live and die by their anti-tank punch, so rank by firepower
+    // and ATGM capability — not BR closeness, which is all the old model used.
+    const heliPayRaw = percentiler(helis, firepower);
+    const heliScore = u =>
+      brScore(u.br[o.mode], o.targetBR) * 1.0 + (heliPayRaw(u) ?? 0) * 1.6 + (u.atgm ? 0.6 : 0);
+
+    // SPAA by real anti-air capability: a radar SAM launcher massively outranks
+    // a WWII quad-MG. SAM (guided, all-aspect) weighs most, radar (track at
+    // range) next, then gun caliber percentile among SPAA in the bracket.
+    const spaaCalRaw = percentiler(spaas, u => u.aaCal);
+    const spaaScore = u =>
+      brScore(u.br[o.mode], o.targetBR) * 1.0 + (u.sam ? 1.2 : 0) + (u.radar ? 0.6 : 0) +
+      (spaaCalRaw(u) ?? 0.4) * 0.6;
 
     // Ranked candidate pools per role — the UI swaps within these.
     const pools = {
       ground: rankBy(mains, groundScore),
-      spaa: rankBy(spaas, supportScore),
+      spaa: rankBy(spaas, spaaScore),
       fighter: rankBy(planes, fighterScore),
       attacker: rankBy(planes, attackerScore),
-      heli: rankBy(helis, supportScore),
+      heli: rankBy(helis, heliScore),
     };
 
     // --- slot allocation ---
@@ -253,9 +273,16 @@ const LINEUP = (() => {
       });
     }
 
-    notes.push(hasSPAA
-      ? { level: "good", text: "SPAA included — you can answer enemy CAS." }
-      : { level: "warn", text: "No SPAA — you'll be exposed to enemy aircraft with no dedicated answer." });
+    const spaaUnit = slots.find(s => s.category === "spaa")?.unit;
+    if (spaaUnit?.sam) {
+      notes.push({ level: "good", text: "SAM SPAA included — guided missiles answer enemy CAS and helicopters at long range." });
+    } else if (spaaUnit?.radar) {
+      notes.push({ level: "good", text: "Radar SPAA included — it can track and engage aircraft at range." });
+    } else if (hasSPAA) {
+      notes.push({ level: "good", text: "SPAA included — you can answer enemy CAS (gun-based, best at shorter range)." });
+    } else {
+      notes.push({ level: "warn", text: "No SPAA — you'll be exposed to enemy aircraft with no dedicated answer." });
+    }
 
     if (!hasAir) notes.push({ level: "info", text: "No aircraft — no way to contribute from the air or counter enemy planes offensively." });
 
