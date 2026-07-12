@@ -11,34 +11,49 @@ const LINEUP = (() => {
 
   // Ground playstyles. `stat` returns a 0..1 bonus from the vehicle's real
   // stats (armor or mobility percentile within the current bracket).
+  // `desc` is shown in the UI so players know what the scorer optimizes for.
   const PLAYSTYLES = {
     balanced: {
       classW: { medium: 1.0, heavy: 0.85, td: 0.7, light: 0.65 },
-      stat: (u, p) => 0.35 * p.armorPct(u) + 0.35 * p.mobPct(u),
+      stat: (u, p) => 0.35 * p.armorPct(u) + 0.35 * p.mobPct(u) + 0.15 * p.crewPct(u) + 0.15 * p.penPct(u),
+      variety: true, // mild class-mix damping is welcome here
+      desc: "Mixed classes near your BR. Armor + mobility + crew + gun pen, with mild variety so you don't get five mediums.",
     },
     armor: {
       classW: { heavy: 1.0, medium: 0.8, td: 0.6, light: 0.15 },
-      // Armor + reload: a fast-reloading tank brawls better. 80% effective
-      // armor + 20% reload speed (inverted — lower reload = better).
-      stat: (u, p) => 0.8 * p.armorPct(u) + 0.2 * p.reloadPct(u),
+      // Armor + reload: a fast-reloading tank brawls better. 70% effective
+      // armor + 15% reload + 15% crew (more survivors in a brawl).
+      stat: (u, p) => 0.7 * p.armorPct(u) + 0.15 * p.reloadPct(u) + 0.15 * p.crewPct(u),
+      variety: false, // mono-class wall is the point
+      desc: "Heavy wall. Ranks by effective armor (ERA/composite), reload, and crew count. Class variety is off so heavies stay heavies.",
     },
     speed: {
       classW: { light: 1.0, medium: 0.85, td: 0.5, heavy: 0.1 },
-      // 70% hp/ton + 15% reverse speed (peaking ridgelines) + 15% turret
-      // traverse (reactive flanking). Reverse and turret are smaller nudges.
-      stat: (u, p) => 0.7 * p.mobPct(u) + 0.15 * p.revPct(u) + 0.15 * p.turretPct(u),
+      // 65% hp/ton + 15% reverse + 10% turret + 10% max road speed proxy via mob.
+      stat: (u, p) => 0.65 * p.mobPct(u) + 0.15 * p.revPct(u) + 0.1 * p.turretPct(u) + 0.1 * p.crewPct(u),
+      variety: false,
+      desc: "Lights & flankers. Ranks by hp/ton, reverse speed, and turret traverse. Class variety is off so lights stay lights.",
     },
     sniper: {
       classW: { td: 1.0, medium: 0.7, heavy: 0.5, light: 0.45 },
-      // Real gun data: penetration is the primary sniper stat (50%), velocity
-      // second (flat trajectory, 30%), bore caliber third (20%). Penetration
-      // is estimated from DeMarre/Lanz-Odermatt shell physics in build_mobility.py.
+      // Real gun data: penetration primary, velocity second, caliber third.
       stat: (u, p) => 0.5 * p.penPct(u) + 0.3 * p.velPct(u) + 0.2 * p.calPct(u),
+      variety: false,
+      desc: "Long-range punch. Ranks by gun penetration at 1 km, shell velocity, and bore caliber — tank destroyers preferred.",
     },
   };
 
+  // BR closeness shaped to match the health check: vehicles within 0.3 of
+  // target are "core", ≥0.7 below are "ballast". Linear 0..1 falloff alone let
+  // a strong 0.8-downtier outscore an average top-BR pick — then the health
+  // panel called that same pick ballast. This curve keeps the generator and
+  // the evaluator pointing the same way.
   function brScore(br, target) {
-    return Math.max(0, 1 - (target - br) / BR_WINDOW);
+    const delta = target - br;
+    if (delta <= 0) return 1;
+    if (delta <= 0.3) return 1.0 - delta * 0.15;           // 1.00 → 0.955
+    if (delta <= 0.7) return 0.955 - (delta - 0.3) * 1.1;  // 0.955 → 0.515
+    return Math.max(0, 0.515 - (delta - 0.7) * 1.7);       // 0.515 → 0 at ~1.0
   }
 
   // Returns fn(u) -> percentile 0..1 of valueFn(u) within `pool`, or null when
@@ -57,15 +72,28 @@ const LINEUP = (() => {
     };
   }
 
-  // Sort by score, high to low. Exact score ties (identical stats, or shared
-  // fallbacks when data is missing) break toward the vehicle with the most
-  // research points — i.e. the more advanced pick when two are a dead heat.
+  // Sort by score, high to low. Exact score ties break toward tech-tree
+  // vehicles (more likely owned), then higher research points.
   function rankBy(arr, scoreFn) {
     return arr.slice().sort((a, b) => {
       const d = scoreFn(b) - scoreFn(a);
       if (Math.abs(d) > 1e-9) return d;
+      const ownA = (!a.premium && !a.squadron && !a.gift) ? 1 : 0;
+      const ownB = (!b.premium && !b.squadron && !b.gift) ? 1 : 0;
+      if (ownA !== ownB) return ownB - ownA;
       return (b.researchPoints || 0) - (a.researchPoints || 0);
     });
+  }
+
+  // Include a vehicle if it's tech-tree, OR any of its special sources is
+  // enabled. A premium that also carries a gift/event flag (e.g. MiG-23ML has
+  // costGold + gift: msi_notebook) must still appear when Premium is checked —
+  // requiring every flag to match excluded those vehicles entirely.
+  function sourceAllowed(u, o) {
+    if (!u.premium && !u.squadron && !u.gift) return true;
+    return (u.premium && o.incPremium) ||
+           (u.squadron && o.incSquadron) ||
+           (u.gift && o.incGift);
   }
 
   function generate(units, o) {
@@ -74,9 +102,7 @@ const LINEUP = (() => {
 
     const pool = units.filter(u =>
       u.country === o.nation &&
-      (!u.premium || o.incPremium) &&
-      (!u.squadron || o.incSquadron) &&
-      (!u.gift || o.incGift) &&
+      sourceAllowed(u, o) &&
       u.br[o.mode] != null &&
       u.br[o.mode] <= o.targetBR + 1e-9 &&
       u.br[o.mode] >= o.targetBR - BR_WINDOW - 1e-9
@@ -89,10 +115,7 @@ const LINEUP = (() => {
 
     // --- scoring context ---
     // Armor: prefer the effective-armor rating (effArmor), which folds in
-    // composite arrays, ERA, and spall-liners on top of raw steel — so a T-90M
-    // (Relikt + composite) outscores a Maus (pure RHA) even though the Maus has
-    // thicker base steel. Fall back to the old raw-steel formula for the rare
-    // tank with no effArmor (armor.json missing or the tank predates composite).
+    // composite arrays, ERA, and spall-liners on top of raw steel.
     const armorValue = u => u.effArmor > 0
       ? u.effArmor
       : (u.armorHull ?? 0) + (u.armorTurret ?? 0) * 0.5;
@@ -101,92 +124,125 @@ const LINEUP = (() => {
     const velPctRaw = percentiler(mains, u => u.gunVel);
     const calPctRaw = percentiler(mains, u => u.gunCal);
     const penPctRaw = percentiler(mains, u => u.gunPen);
-    // Reload: lower is better, so negate. Missing reload falls to null → 0.5.
     const reloadPctRaw = percentiler(mains, u => u.reloadTime ? -u.reloadTime : null);
     const revPctRaw = percentiler(mains, u => u.revRatio > 0 ? u.revRatio : null);
     const turretPctRaw = percentiler(mains, u => u.turretSpeed ?? null);
+    const crewPctRaw = percentiler(mains, u => u.crewCount ?? null);
+
+    // Missing-data fallbacks: neutral 0.5 for mobility/crew; 0.35 for missing
+    // guns (below median — a missile/HE-only vehicle is a poor sniper).
     const p = {
       armorPct: u => armorPctRaw(u) ?? 0.5,
-      // Real hp/ton percentile; for the rare vehicle missing it, fall back to
-      // "lighter armor ≈ faster" so Speed still ranks it sensibly.
       mobPct: u => mobPctRaw(u) ?? (1 - (armorPctRaw(u) ?? 0.5)),
-      // Real gun velocity / bore / penetration percentiles. A vehicle with no
-      // AP round (missile/HE-only) is a poor sniper, so missing data falls below
-      // median.
       velPct: u => velPctRaw(u) ?? 0.35,
       calPct: u => calPctRaw(u) ?? 0.35,
       penPct: u => penPctRaw(u) ?? 0.35,
       reloadPct: u => reloadPctRaw(u) ?? 0.5,
       revPct: u => revPctRaw(u) ?? 0.5,
       turretPct: u => turretPctRaw(u) ?? 0.5,
+      crewPct: u => crewPctRaw(u) ?? 0.5,
     };
-    // BR closeness still matters (avoid heavy downtiers) but the playstyle
-    // stat is now a co-equal driver, so Speed really favors high hp/ton etc.
-    // Small capability nudges the raw stats don't otherwise capture: a
-    // stabilizer (can shoot on the move) and optics — thermals (spot through
-    // bushes/smoke and at night, a big top-tier edge) weigh more than plain
-    // night vision.
+
+    // Uptier fightability: can this gun pen the armor you'll meet at target+1.0?
+    // Sample effective armor of tanks (any nation) that live in [target, target+1]
+    // and score pen against that median. Pure in-bracket percentiles can't tell
+    // "best of a weak bracket" from "actually fights uptiers."
+    const uptierArmor = [];
+    for (const u of units) {
+      if (u.type !== "tank" || u.cls === "spaa") continue;
+      const br = u.br[o.mode];
+      if (br == null || br < o.targetBR - 1e-9 || br > o.targetBR + 1.0 + 1e-9) continue;
+      const a = armorValue(u);
+      if (a > 0) uptierArmor.push(a);
+    }
+    uptierArmor.sort((a, b) => a - b);
+    const needArmor = uptierArmor.length
+      ? uptierArmor[Math.floor(uptierArmor.length * 0.5)]
+      : (50 + o.targetBR * 40);
+    const fightUptier = u => {
+      if (u.gunPen == null || u.gunPen <= 0) return 0.3;
+      // Soft saturating ratio: pen == need → 0.7, pen == 1.4×need → ~1.0.
+      const ratio = u.gunPen / Math.max(needArmor, 1);
+      return Math.max(0, Math.min(1, ratio * 0.7));
+    };
+
+    // Tech-tree preference: when scores are otherwise close, prefer vehicles
+    // the player is more likely to own. Small nudge — never overrides a clearly
+    // better premium if premium is enabled.
+    const ownershipNudge = u =>
+      (!u.premium && !u.squadron && !u.gift) ? 0.12 : 0;
+
+    // BR closeness is the dominant term (×2.0) so the generator optimizes for
+    // the same thing the health panel measures. Class fit + stats still matter
+    // but can no longer promote a 0.8-downtier over a merely-average top pick.
     const groundScore = u =>
-      brScore(u.br[o.mode], o.targetBR) * 1.1 + (ps.classW[u.cls] || 0.5) * 1.4 +
-      ps.stat(u, p) * 1.4 + (u.stabilized ? 0.15 : 0) +
-      (u.thermal ? 0.12 : u.nv ? 0.05 : 0);
+      brScore(u.br[o.mode], o.targetBR) * 2.0 +
+      (ps.classW[u.cls] || 0.5) * 1.2 +
+      ps.stat(u, p) * 1.3 +
+      fightUptier(u) * 0.9 +
+      (u.stabilized ? 0.12 : 0) +
+      (u.thermal ? 0.12 : u.nv ? 0.05 : 0) +
+      ownershipNudge(u);
 
     // Ground-attack firepower = real ordnance weight with a big premium for
-    // ATGMs (guided tank-killers punch far above their mass). Blended here so
-    // the stored ordnanceKg stays an honest display figure.
+    // ATGMs (guided tank-killers punch far above their mass).
     const firepower = u => u.ordnanceKg + (u.atgm ? 2500 : 0);
 
+    const fightersOnly = planes.filter(u => u.cls === "fighter");
     const turnPctRaw = percentiler(planes, u => u.turnTime);
     const payPctRaw = percentiler(planes, firepower);
     const climbPctRaw = percentiler(planes, u => u.climbRate);
+    const speedPctRaw = percentiler(planes, u => u.maxSpeed);
     const turnQuality = u => 1 - (turnPctRaw(u) ?? 0.7); // lower turn time is better
-    // Fighter: turn time (dogfighting) + climb rate (energy fighting) co-equal.
-    const fighterScore = u =>
-      brScore(u.br[o.mode], o.targetBR) * 1.0 + turnQuality(u) * 0.8 +
-      (climbPctRaw(u) ?? 0.5) * 0.6 + (u.cls === "fighter" ? 0.4 : 0);
-    // CAS by real firepower, but weighted for ground-RB reality: a purpose-built
-    // attacker (dive bomber / strike jet) is what you want. A high-altitude
-    // strategic bomber carries far more tonnage, yet spawns high, can't dive
-    // accurately on tanks, and is easy SPAA food — so raw payload alone must not
-    // let a B-29 win the CAS slot. Reward attackers, penalize heavy bombers.
-    // Bombers also get their firepower percentile capped so even in a bomb-heavy
-    // bracket a B-29 can't outscore a purpose-built attacker.
-    // The level-bomber penalty is dropped when the user explicitly wants level
-    // bombers for CAS, so they get ranked on payload instead of pushed down.
-    const attackerScore = u => {
+
+    // Fighter and attacker scores are intentionally normalized to ~0..1 so the
+    // balanced single-slot tiebreak compares like with like (raw attackerScore
+    // used to sum higher and almost always win).
+    const fighterRaw = u =>
+      brScore(u.br[o.mode], o.targetBR) * 1.2 +
+      turnQuality(u) * 0.9 +
+      (climbPctRaw(u) ?? 0.5) * 0.7 +
+      (speedPctRaw(u) ?? 0.5) * 0.4 +
+      (u.cls === "fighter" ? 0.8 : 0) +
+      ownershipNudge(u);
+    // Max theoretical ≈ 1.2+0.9+0.7+0.4+0.8+0.12 = 4.12
+    const FIGHTER_NORM = 4.12;
+    const fighterScore = u => fighterRaw(u) / FIGHTER_NORM;
+
+    const attackerRaw = u => {
       const isBomber = u.cls === "bomber";
       const pay = isBomber ? Math.min(payPctRaw(u) ?? 0, 0.3) : (payPctRaw(u) ?? 0);
-      return brScore(u.br[o.mode], o.targetBR) * 1.2 + pay * 1.2 +
-        (u.cls === "attacker" ? 0.8 : 0) - (!o.levelBombersCAS && isBomber ? 1.0 : 0);
+      return brScore(u.br[o.mode], o.targetBR) * 1.2 +
+        pay * 1.2 +
+        (u.cls === "attacker" ? 0.6 : 0) +
+        (u.atgm ? 0.35 : 0) +
+        ownershipNudge(u) -
+        (!o.levelBombersCAS && isBomber ? 1.0 : 0);
     };
+    // Max theoretical ≈ 1.2+1.2+0.6+0.35+0.12 = 3.47 (bomber penalty aside)
+    const ATTACKER_NORM = 3.47;
+    const attackerScore = u => attackerRaw(u) / ATTACKER_NORM;
 
-    // Helicopters live and die by their anti-tank punch, so rank by firepower
-    // and ATGM capability — not BR closeness, which is all the old model used.
-    // ATGM standoff range is a tiebreaker: longer-range missiles let the heli
-    // engage from outside SPAA range.
+    // Helicopters: BR closeness + ATGM standoff range dominate. Ordnance kg used
+    // to swamp everything and pick a 9.7 with more rockets over a 10.7 with
+    // longer-range ATGMs. Range is now the main capability term.
     const heliPayRaw = percentiler(helis, firepower);
     const heliScore = u =>
-      brScore(u.br[o.mode], o.targetBR) * 1.0 + (heliPayRaw(u) ?? 0) * 1.6 +
-      (u.atgm ? 0.4 + Math.min(u.atgmRange / 10000, 0.4) : 0);
+      brScore(u.br[o.mode], o.targetBR) * 1.8 +
+      (u.atgm ? 0.6 + Math.min((u.atgmRange || 0) / 8000, 0.75) : 0) +
+      (heliPayRaw(u) ?? 0) * 0.5 +
+      ownershipNudge(u);
 
-    // SPAA by real anti-air capability: a radar SAM launcher massively outranks
-    // a WWII quad-MG. SAM (guided, all-aspect) weighs most, radar (track at
-    // range) next, then gun caliber percentile among SPAA in the bracket.
-    // Missile-only SPAA (cal=0) and missing-data SPAA (cal=null) both fall to
-    // the 0.4 fallback — a SAM launcher shouldn't rank worse on caliber than a
-    // vehicle with no data at all.
     const spaaCalRaw = percentiler(spaas, u => u.aaCal);
     const spaaScore = u => {
       const calScore = (u.aaCal == null || u.aaCal === 0) ? 0.4 : (spaaCalRaw(u) ?? 0.4);
-      return brScore(u.br[o.mode], o.targetBR) * 1.0 + (u.sam ? 1.2 : 0) + (u.radar ? 0.6 : 0) +
-        calScore * 0.6;
+      return brScore(u.br[o.mode], o.targetBR) * 1.4 +
+        (u.sam ? 1.2 : 0) + (u.radar ? 0.6 : 0) +
+        calScore * 0.6 +
+        ownershipNudge(u);
     };
 
-    // CAS candidate pool. The user can restrict it to level bombers
-    // (cls "bomber"), dive bombers (the diveBomber flag), or both. When either
-    // restriction is on, keep only the matching aircraft — unless the bracket
-    // has none of them, in which case fall back to all planes so the slot still
-    // fills (a warning below tells the user why).
+    // CAS candidate pool. Restrict to level/dive bombers when asked.
     const wantBomberCAS = o.levelBombersCAS || o.diveBombersCAS;
     let casPlanes = planes;
     if (wantBomberCAS) {
@@ -196,39 +252,69 @@ const LINEUP = (() => {
       if (filtered.length) casPlanes = filtered;
     }
 
-    // Ranked candidate pools per role — the UI swaps within these.
+    // Fighter pool is fighters-only so "Fighter — air superiority" can't hand
+    // you a nimble attacker. Fall back to all planes only if the bracket has
+    // zero fighters (with a warning).
+    const fighterPool = fightersOnly.length ? fightersOnly : planes;
+    if (o.planeRole === "fighter" && !fightersOnly.length && planes.length) {
+      warnings.push("No fighters in this BR bracket — ranking all aircraft by dogfight stats instead.");
+    }
+
     const pools = {
       ground: rankBy(mains, groundScore),
       spaa: rankBy(spaas, spaaScore),
-      fighter: rankBy(planes, fighterScore),
+      fighter: rankBy(fighterPool, fighterScore),
       attacker: rankBy(casPlanes, attackerScore),
       heli: rankBy(helis, heliScore),
     };
 
     // --- slot allocation ---
+    // Plane / SPAA / heli counts: user can override the auto heuristics.
+    const parseCount = (v, auto) => {
+      if (v == null || v === "" || v === "auto") return auto;
+      const n = parseInt(v, 10);
+      return Number.isFinite(n) ? Math.max(0, n) : auto;
+    };
+
     const wantPlanes = o.planeRole && o.planeRole !== "none" && planes.length;
+    const autoAir = wantPlanes ? (o.slots >= 6 ? 2 : 1) : 0;
+    const airTotal = wantPlanes ? parseCount(o.airCount, autoAir) : 0;
+
     let fighterN = 0, attackerN = 0;
-    if (wantPlanes) {
-      const total = o.slots >= 6 ? 2 : 1;
-      if (o.planeRole === "fighter") fighterN = total;
-      else if (o.planeRole === "attacker") attackerN = total;
+    if (wantPlanes && airTotal > 0) {
+      if (o.planeRole === "fighter") fighterN = airTotal;
+      else if (o.planeRole === "attacker") attackerN = airTotal;
       else { // balanced: split when there's room, else take the stronger option
-        if (total >= 2) { fighterN = 1; attackerN = 1; }
-        else {
+        if (airTotal >= 2) {
+          fighterN = Math.ceil(airTotal / 2);
+          attackerN = airTotal - fighterN;
+        } else {
           const bf = pools.fighter[0], ba = pools.attacker[0];
           if (bf && ba) (fighterScore(bf) >= attackerScore(ba) ? fighterN = 1 : attackerN = 1);
           else if (bf) fighterN = 1; else if (ba) attackerN = 1;
         }
       }
     }
-    // SPAA count scales with lineup size instead of being hard-capped at 1: a
-    // big lineup (8+ slots) warrants a second anti-air when the bracket has one
-    // to spare, since deeper lineups mean more time exposed to enemy CAS.
+
+    const autoSPAA = (o.incSPAA && spaas.length && o.slots >= 3)
+      ? ((o.slots >= 8 && spaas.length >= 2) ? 2 : 1)
+      : 0;
+    // spaaCount overrides; "0" forces none even if the SPAA checkbox is on.
+    // Checkbox still acts as a master enable when count is auto.
     let spaaN = 0;
-    if (o.incSPAA && spaas.length && o.slots >= 3) {
-      spaaN = (o.slots >= 8 && spaas.length >= 2) ? 2 : 1;
+    if (o.spaaCount != null && o.spaaCount !== "" && o.spaaCount !== "auto") {
+      spaaN = Math.min(parseCount(o.spaaCount, 0), spaas.length);
+    } else if (o.incSPAA) {
+      spaaN = autoSPAA;
     }
-    let heliN = (o.incHelis && helis.length && o.slots >= 5) ? 1 : 0;
+
+    const autoHeli = (o.incHelis && helis.length && o.slots >= 5) ? 1 : 0;
+    let heliN = 0;
+    if (o.heliCount != null && o.heliCount !== "" && o.heliCount !== "auto") {
+      heliN = Math.min(parseCount(o.heliCount, 0), helis.length);
+    } else if (o.incHelis) {
+      heliN = autoHeli;
+    }
 
     // Always reserve at least two slots (or all, for tiny lineups) for mains.
     const minGround = Math.min(2, o.slots);
@@ -254,17 +340,20 @@ const LINEUP = (() => {
       }
       return out;
     };
-    // Ground uses greedy class-repetition damping so lineups aren't 5 mediums.
+    // Ground uses greedy class-repetition damping only for Balanced. Explicit
+    // playstyles (Armor/Speed/Sniper) want mono-class and damping would fight
+    // that choice after 2–3 heavies/lights/TDs.
     const takeGround = n => {
       const out = [];
       const clsCount = {};
       const cands = pools.ground.filter(u => !used.has(u.id));
+      const useVariety = ps.variety !== false;
       while (out.length < n && cands.length) {
         let best = -1, bestScore = -Infinity;
         for (let i = 0; i < cands.length; i++) {
-          // Mild, capped variety penalty: nudges toward mixed classes without
-          // overriding a strong playstyle preference (e.g. Speed wanting lights).
-          const damp = Math.max(0.7, 1 - 0.12 * (clsCount[cands[i].cls] || 0));
+          const damp = useVariety
+            ? Math.max(0.75, 1 - 0.1 * (clsCount[cands[i].cls] || 0))
+            : 1;
           const s = groundScore(cands[i]) * damp;
           if (s > bestScore) { bestScore = s; best = i; }
         }
@@ -284,11 +373,7 @@ const LINEUP = (() => {
       ...take(pools.heli, heliN, "heli"),
     ];
 
-    // Backfill: a support role can come up short — most commonly balanced air
-    // in a bracket with only one aircraft, where the fighter pick consumes it
-    // and the attacker pick finds nothing distinct left. Rather than return
-    // fewer vehicles than the requested crew slots, top up with the next-best
-    // ground vehicles so the lineup is always full when the bracket allows.
+    // Backfill support shortfalls with ground so the lineup is always full.
     const airWanted = fighterN + attackerN + heliN;
     const airGot = slots.filter(s => ["fighter", "attacker", "heli"].includes(s.category)).length;
     if (slots.length < o.slots) {
@@ -308,10 +393,18 @@ const LINEUP = (() => {
       const kinds = [o.levelBombersCAS && "level", o.diveBombersCAS && "dive"].filter(Boolean).join(" or ");
       warnings.push(`No ${kinds} bombers in this BR bracket — using the best available attacker for CAS instead.`);
     }
-    if (o.incSPAA && !spaas.length) warnings.push("No SPAA available in this BR bracket.");
-    if (o.incSPAA && spaas.length && o.slots < 3) warnings.push("SPAA skipped — needs at least 3 crew slots.");
-    if (o.incHelis && !helis.length) warnings.push("No helicopters available in this BR bracket.");
-    if (o.incHelis && helis.length && o.slots < 5) warnings.push("Helicopter skipped — needs at least 5 crew slots.");
+    if ((o.incSPAA || (o.spaaCount && o.spaaCount !== "auto" && o.spaaCount !== "0")) && !spaas.length) {
+      warnings.push("No SPAA available in this BR bracket.");
+    }
+    if (o.incSPAA && spaas.length && o.slots < 3 && (o.spaaCount === "auto" || o.spaaCount == null)) {
+      warnings.push("SPAA skipped — needs at least 3 crew slots.");
+    }
+    if ((o.incHelis || (o.heliCount && o.heliCount !== "auto" && o.heliCount !== "0")) && !helis.length) {
+      warnings.push("No helicopters available in this BR bracket.");
+    }
+    if (o.incHelis && helis.length && o.slots < 5 && (o.heliCount === "auto" || o.heliCount == null)) {
+      warnings.push("Helicopter skipped — needs at least 5 crew slots.");
+    }
 
     const health = assess(slots, o);
 
@@ -319,16 +412,7 @@ const LINEUP = (() => {
   }
 
   // Fact-based sufficiency check. Everything here follows from War Thunder's
-  // matchmaker rules and the actual BRs of the vehicles that got picked — no
-  // opinion, just numbers the player can verify.
-  //
-  //   • You queue at the HIGHEST BR vehicle in your lineup (your "top BR").
-  //   • The matchmaker can up/down-tier you by ±1.0, so at top BR T you face
-  //     anything from T-1.0 to T+1.0.
-  //   • A vehicle is a competitive respawn if it's within 0.3 of your top BR
-  //     (still ≤ enemy top even in a full uptier band). One that sits ≥0.7
-  //     below is "downtier ballast": fine in a downtier, badly outmatched when
-  //     you're uptiered.
+  // matchmaker rules and the actual BRs of the vehicles that got picked.
   function assess(slots, o) {
     const mode = o.mode;
     const brs = slots.map(s => s.unit.br[mode]).filter(b => b != null);
@@ -336,29 +420,24 @@ const LINEUP = (() => {
 
     const topBR = Math.max(...brs);
     const avgBR = brs.reduce((a, b) => a + b, 0) / brs.length;
-    // "Competitive respawns" measures GROUND depth only. A plane or SPAA sitting
-    // at top BR isn't a vehicle you respawn into to brawl tanks, so counting it
-    // would make the lineup look deeper at top BR than it really is.
     const groundBrs = slots
       .filter(s => s.category === "ground")
       .map(s => s.unit.br[mode])
       .filter(b => b != null);
-    const corePool = groundBrs.length ? groundBrs : brs; // all-air lineup: fall back to every vehicle
-    const core = corePool.filter(b => topBR - b <= 0.3 + 1e-9).length;      // competitive respawns
-    const ballast = corePool.filter(b => topBR - b >= 0.7 - 1e-9).length;   // weak when uptiered
+    const corePool = groundBrs.length ? groundBrs : brs;
+    const core = corePool.filter(b => topBR - b <= 0.3 + 1e-9).length;
+    const ballast = corePool.filter(b => topBR - b >= 0.7 - 1e-9).length;
     const coreTotal = corePool.length;
     const hasSPAA = slots.some(s => s.category === "spaa");
     const hasAir = slots.some(s => ["fighter", "attacker", "heli"].includes(s.category));
     const belowTarget = o.targetBR - topBR;
 
-    // Headline verdict is driven by how many competitive respawns you have.
     let verdict;
     if (core >= 3 && ballast <= core) verdict = { key: "strong", label: "Strong lineup" };
     else if (core >= 2) verdict = { key: "solid", label: "Solid lineup" };
     else verdict = { key: "thin", label: "Thin at top BR" };
 
     const notes = [];
-    // The core fact that answers "why is there a lower-BR vehicle here?"
     notes.push({
       level: "info",
       text: `You queue at BR ${topBR.toFixed(1)} (your highest vehicle). The matchmaker can uptier you +1.0, so expect enemies up to BR ${(topBR + 1.0).toFixed(1)} and downtiers to ${(topBR - 1.0).toFixed(1)}.`,
@@ -399,7 +478,5 @@ const LINEUP = (() => {
     return { topBR, avgBR, targetBR: o.targetBR, core, ballast, total: coreTotal, hasSPAA, hasAir, verdict, notes };
   }
 
-  // assess is exported so the UI can recompute lineup health after a per-slot
-  // swap changes which vehicles are in the lineup.
-  return { generate, assess, BR_WINDOW };
+  return { generate, assess, BR_WINDOW, PLAYSTYLES };
 })();

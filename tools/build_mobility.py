@@ -149,6 +149,86 @@ def _shell_slots(weapon_file):
     return slots
 
 
+def _armor_power_at(armorpower, distance_m):
+    """Read RHA penetration (mm) from a shell's armorpower table at distance_m.
+    Keys look like ArmorPower1000m: [pen_mm, distance_m]. Returns None if absent."""
+    if not isinstance(armorpower, dict):
+        return None
+    # Exact key first (common case).
+    exact = armorpower.get(f"ArmorPower{int(distance_m)}m")
+    if isinstance(exact, list) and exact and isinstance(exact[0], (int, float)):
+        return float(exact[0])
+    # Otherwise pick the nearest tabulated distance.
+    best, best_dist = None, None
+    for key, val in armorpower.items():
+        if not (isinstance(key, str) and key.startswith("ArmorPower") and key.endswith("m")):
+            continue
+        if not (isinstance(val, list) and val and isinstance(val[0], (int, float))):
+            continue
+        try:
+            d = float(key[len("ArmorPower"):-1])
+        except ValueError:
+            d = val[1] if len(val) > 1 and isinstance(val[1], (int, float)) else None
+        if d is None:
+            continue
+        if best_dist is None or abs(d - distance_m) < abs(best_dist - distance_m):
+            best, best_dist = float(val[0]), d
+    return best
+
+
+def _hitpower_retention(bullet, distance_m=1000.0, default=0.9):
+    hp = bullet.get("hitpower") or bullet.get("hitPower") or {}
+    if not isinstance(hp, dict):
+        return default
+    exact = hp.get(f"HitPower{int(distance_m)}m")
+    if isinstance(exact, list) and exact and isinstance(exact[0], (int, float)):
+        return float(exact[0])
+    return default
+
+
+def _shell_pen_1000m(bullet, speed, cal_m):
+    """Best available 1000m RHA pen for an AP shell, in mm.
+
+    Priority:
+      1. armorpower table (authoritative — what the client shows)
+      2. Lanz-Odermatt for long-rod APFSDS (no armorpower table)
+      3. DeMarre for WWII solid shot
+    """
+    # 1) Tabulated armorpower (3BM12/15/22 etc. store real ~400mm values here).
+    ap = bullet.get("armorpower") or bullet.get("armorPower")
+    table = _armor_power_at(ap, 1000.0)
+    if table is not None and table > 10:
+        # HEAT stock shells sometimes ship a near-zero kinetic armorpower table
+        # (e.g. ArmorPower0m: [5.0, 10.0]); ignore those junk rows.
+        return round(table)
+
+    dmg = bullet.get("damage", {})
+    kin = dmg.get("kinetic", {}) if isinstance(dmg, dict) else {}
+    lo_len = kin.get("lanzOdermattWorkingLength")
+    lo_density = kin.get("lanzOdermattDensity")
+
+    # 2) Lanz-Odermatt long-rod fallback. The naive formula
+    #    pen = workingLength × (density / 7850) over-predicts by ~2–2.5×
+    #    (T-72M2 Moderna 3BM42 was showing 1083mm). Use the hydrodynamic
+    #    sqrt(density ratio) form scaled to match known ArmorPower shells:
+    #    3BM42 (L=540, ρ=17500) → ~440mm at 1000m.
+    if isinstance(lo_len, (int, float)) and isinstance(lo_density, (int, float)) and lo_len > 0:
+        density_ratio = max(lo_density, 1.0) / 7850.0
+        pen_0m = lo_len * (density_ratio ** 0.5) * 0.55
+        retention = _hitpower_retention(bullet, 1000.0, 0.9)
+        # APFSDS velocity loss barely hurts pen; keep retention mild.
+        return round(pen_0m * (0.85 + 0.15 * retention))
+
+    # 3) DeMarre for solid-shot WWII shells (calibrated to 88mm KwK36 ≈ 203mm @ 0m).
+    if speed and isinstance(bullet.get("mass"), (int, float)) and cal_m:
+        mass = bullet["mass"]
+        cal_mm = cal_m * 1000
+        pen_0m = 0.00211 * (mass ** 0.71) * (speed ** 1.43) * (cal_mm ** 0.07)
+        retention = _hitpower_retention(bullet, 1000.0, 0.9)
+        return round(pen_0m * (retention ** 1.43))
+    return None
+
+
 def _gun_stats_from_model(model, mods):
     common = model.get("commonWeapons") or {}
     weps = common.get("Weapon") if isinstance(common, dict) else common
@@ -185,58 +265,14 @@ def _gun_stats_from_model(model, mods):
                 v = b.get("speed")
                 if isinstance(v, (int, float)):
                     best_vel = max(best_vel, v)  # fastest AP round = flattest shooter
-                # Penetration estimate. War Thunder does NOT store a precomputed
-                # penetration value — it computes penetration at runtime from the
-                # shell's physics parameters. We estimate it from the two models
-                # the game uses:
-                #
-                #  • APFSDS/APDS (modern): Lanz-Odermatt. The penetrator's
-                #    workingLength (mm) × density ratio gives the penetration at
-                #    ~point-blank. A DU penetrator (density 18600) vs RHA (7850)
-                #    gives ~2.37× the working length. Tungsten (17600) ~2.24×.
-                #    At 1000m the penetrator retains most of its speed (APFSDS
-                #    loses little velocity), so the 1000m pen ≈ 0.9 × point-blank.
-                #
-                #  • APCBC/APCR (WWII): DeMarre. The hitpower block's HitPower0m[0]
-                #    is a velocity-retention factor (1.0 at muzzle, ~0.9 at 1000m).
-                #    Penetration scales with speed² × mass^0.71 × caliber^1.07,
-                #    normalized so a reference shell (e.g. 88mm KwK36 APCBC at
-                #    773 m/s, 10.2 kg) produces ~203mm at 0m (known in-game value).
-                #    The DeMarre K constant is derived from this reference.
-                dmg = b.get("damage", {})
-                kin = dmg.get("kinetic", {}) if isinstance(dmg, dict) else {}
-                lo_len = kin.get("lanzOdermattWorkingLength")
-                lo_density = kin.get("lanzOdermattDensity")
-                if isinstance(lo_len, (int, float)) and isinstance(lo_density, (int, float)) and lo_len > 0 and v:
-                    # Lanz-Odermatt: penetration ≈ workingLength × (density / 7850)
-                    # scaled by speed retention (APFSDS retains ~90% at 1000m).
-                    density_ratio = lo_density / 7850.0
-                    pen_0m = lo_len * density_ratio
-                    # hitpower retention factor at 1000m (default 0.9 if absent)
-                    hp = b.get("hitpower", {})
-                    retention = 0.9
-                    if isinstance(hp, dict):
-                        hp1k = hp.get("HitPower1000m")
-                        if isinstance(hp1k, list) and hp1k and isinstance(hp1k[0], (int, float)):
-                            retention = hp1k[0]
-                    best_pen = max(best_pen, round(pen_0m * retention))
-                elif v and isinstance(b.get("mass"), (int, float)):
-                    # DeMarre estimate for WWII shells. K is calibrated so the
-                    # 88mm KwK36 APCBC (773 m/s, 10.2 kg, 88mm) ≈ 203mm at 0m,
-                    # matching known in-game penetration.
-                    mass = b["mass"]
-                    cal_mm = cal * 1000
-                    K_demarre = 0.00211  # calibrated vs 88mm KwK36 APCBC = 203mm
-                    pen_0m = K_demarre * (mass ** 0.71) * (v ** 1.43) * (cal_mm ** 0.07)
-                    # Scale to 1000m using hitpower retention
-                    hp = b.get("hitpower", {})
-                    retention = 0.9
-                    if isinstance(hp, dict):
-                        hp1k = hp.get("HitPower1000m")
-                        if isinstance(hp1k, list) and hp1k and isinstance(hp1k[0], (int, float)):
-                            retention = hp1k[0]
-                    pen_1k = pen_0m * (retention ** 1.43)  # speed scales with retention, pen with speed^1.43
-                    best_pen = max(best_pen, round(pen_1k))
+                # Penetration at 1000m. Prefer the shell's own armorpower table
+                # (ArmorPower1000m[0] is RHA mm) — this is what the game uses for
+                # display and is correct for 3BM22-class shells (~400mm, not 1000+).
+                # Only fall back to physics estimates when the table is absent
+                # (some long-rod APFSDS store Lanz-Odermatt params instead).
+                pen_1k = _shell_pen_1000m(b, v, cal)
+                if pen_1k is not None:
+                    best_pen = max(best_pen, pen_1k)
     if best_vel:
         result = {"v": round(best_vel), "c": round(bore_m * 1000, 1)}
         if best_pen > 0:

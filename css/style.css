@@ -381,20 +381,20 @@ input:focus {
 
 /* Playstyle cards */
 
-.playstyles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.playstyles { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 
 .ps-card {
   position: relative;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 3px;
-  padding: 8px 2px 7px;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 10px 9px;
   background: var(--inset);
   border: 1px solid var(--line-2);
   border-radius: 8px;
   cursor: pointer;
-  text-align: center;
+  text-align: left;
   transition: border-color 0.15s, background 0.15s, transform 0.15s;
 }
 .ps-card:hover { border-color: var(--gold-dim); transform: translateY(-1px); }
@@ -405,10 +405,32 @@ input:focus {
   box-shadow: inset 0 1px 0 rgba(233, 182, 74, 0.15);
 }
 .ps-card:has(input:focus-visible) { box-shadow: 0 0 0 3px var(--gold-glow); }
-.ps-icon { font-size: 1.2rem; color: var(--text-faint); transition: color 0.15s; }
+.ps-icon { font-size: 1.1rem; color: var(--text-faint); transition: color 0.15s; }
 .ps-card:hover .ps-icon,
 .ps-card:has(input:checked) .ps-icon { color: var(--gold); }
-.ps-name { font-family: var(--font-display); font-weight: 600; font-size: 0.82rem; letter-spacing: 0.6px; text-transform: uppercase; }
+.ps-name {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.82rem;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.ps-card .ps-icon { display: inline-block; vertical-align: -0.15em; }
+.ps-desc {
+  font-size: 0.72rem;
+  line-height: 1.3;
+  color: var(--text-faint);
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  font-family: var(--font-body);
+}
+.ps-card:has(input:checked) .ps-desc { color: var(--text-dim); }
+
+.support-counts { margin-top: 8px; }
 
 /* Generate button — sticky inside the (possibly scrolling) form panel so the
    CTA is always reachable, even on short screens. */

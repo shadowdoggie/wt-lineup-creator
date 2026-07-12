@@ -108,6 +108,13 @@
               <option value="both">Any bomber — dive or level</option>
             </select>
           </div>
+          <label for="airCount" class="cas-label">Air slots</label>
+          <select id="airCount" title="How many aircraft slots to reserve">
+            <option value="auto" selected>Auto — 1 under 6 slots, 2 at 6+</option>
+            <option value="0">0 — no aircraft</option>
+            <option value="1">1 aircraft</option>
+            <option value="2">2 aircraft</option>
+          </select>
         </div>
       </div>
 
@@ -121,25 +128,56 @@
             <label class="check"><input type="checkbox" id="incSquadron"><span class="check-label">Squadron</span></label>
             <label class="check"><input type="checkbox" id="incGift"><span class="check-label">Event / gift</span></label>
           </div>
-          <p class="hint field-hint-bottom">Tech tree vehicles are always included.</p>
+          <div class="field-row support-counts">
+            <div class="field">
+              <label for="spaaCount">SPAA count</label>
+              <select id="spaaCount" title="Override how many SPAA slots to fill">
+                <option value="auto" selected>Auto</option>
+                <option value="0">0</option>
+                <option value="1">1</option>
+                <option value="2">2</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="heliCount">Heli count</label>
+              <select id="heliCount" title="Override how many helicopter slots to fill">
+                <option value="auto" selected>Auto</option>
+                <option value="0">0</option>
+                <option value="1">1</option>
+              </select>
+            </div>
+          </div>
+          <p class="hint field-hint-bottom">Tech tree vehicles are always included. Premiums with event flags still appear when Premium is on.</p>
         </div>
       </div>
 
       <div class="form-section">
         <h3 class="section-title">Playstyle</h3>
         <div class="playstyles" id="playstyles">
-          <label class="ps-card" title="A bit of everything"><input type="radio" name="playstyle" value="balanced" checked>
+          <label class="ps-card">
+            <input type="radio" name="playstyle" value="balanced" checked>
             <svg class="ico ps-icon"><use href="#i-scales"/></svg>
-            <span class="ps-name">Balanced</span></label>
-          <label class="ps-card" title="Heavies &amp; brawling"><input type="radio" name="playstyle" value="armor">
+            <span class="ps-name">Balanced</span>
+            <span class="ps-desc">Mixed classes near your BR — armor + mobility + gun, mild variety so you don't get five mediums.</span>
+          </label>
+          <label class="ps-card">
+            <input type="radio" name="playstyle" value="armor">
             <svg class="ico ps-icon"><use href="#i-shield"/></svg>
-            <span class="ps-name">Armor</span></label>
-          <label class="ps-card" title="Lights &amp; flanking"><input type="radio" name="playstyle" value="speed">
+            <span class="ps-name">Armor</span>
+            <span class="ps-desc">Heavy wall. Effective armor (ERA/composite), reload &amp; crew. No class-mix damping.</span>
+          </label>
+          <label class="ps-card">
+            <input type="radio" name="playstyle" value="speed">
             <svg class="ico ps-icon"><use href="#i-bolt"/></svg>
-            <span class="ps-name">Speed</span></label>
-          <label class="ps-card" title="Tank destroyers"><input type="radio" name="playstyle" value="sniper">
+            <span class="ps-name">Speed</span>
+            <span class="ps-desc">Lights &amp; flankers. hp/ton, reverse speed, turret traverse. No class-mix damping.</span>
+          </label>
+          <label class="ps-card">
+            <input type="radio" name="playstyle" value="sniper">
             <svg class="ico ps-icon"><use href="#i-scope"/></svg>
-            <span class="ps-name">Sniper</span></label>
+            <span class="ps-name">Sniper</span>
+            <span class="ps-desc">Long-range punch. Gun pen at 1 km, velocity &amp; caliber — TDs preferred.</span>
+          </label>
         </div>
       </div>
 

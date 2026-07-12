@@ -31,7 +31,7 @@
 
   // Form state is remembered across page reloads (see save/loadPrefs). Bump the
   // key if the set of saved fields changes in an incompatible way.
-  const PREFS_KEY = "wtlc_prefs_v2";
+  const PREFS_KEY = "wtlc_prefs_v3";
 
   /* ---------- data loading ---------- */
 
@@ -156,6 +156,9 @@
       incSPAA: $("incSPAA").checked,
       incHelis: $("incHelis").checked,
       planeRole: $("planeRole").value,
+      airCount: $("airCount")?.value || "auto",
+      spaaCount: $("spaaCount")?.value || "auto",
+      heliCount: $("heliCount")?.value || "auto",
       levelBombersCAS: casType === "level" || casType === "both",
       diveBombersCAS: casType === "dive" || casType === "both",
       incPremium: $("incPremium").checked,
@@ -172,6 +175,10 @@
   function updateBomberVis() {
     const role = $("planeRole").value;
     $("bombersOnlyWrap").hidden = !(role === "attacker" || role === "balanced");
+    const airCount = $("airCount");
+    if (airCount) airCount.hidden = role === "none";
+    const airLbl = airCount?.previousElementSibling;
+    if (airLbl && airLbl.htmlFor === "airCount") airLbl.hidden = role === "none";
   }
 
   // Persist the whole form to localStorage so a page reload keeps your setup
@@ -185,6 +192,9 @@
       incSPAA: $("incSPAA").checked,
       incHelis: $("incHelis").checked,
       planeRole: $("planeRole").value,
+      airCount: $("airCount")?.value || "auto",
+      spaaCount: $("spaaCount")?.value || "auto",
+      heliCount: $("heliCount")?.value || "auto",
       casType: $("casType").value,
       incPremium: $("incPremium").checked,
       incSquadron: $("incSquadron").checked,
@@ -214,6 +224,9 @@
     }
     if (p.slots != null && p.slots !== "") $("slots").value = p.slots;
     if (p.planeRole) $("planeRole").value = p.planeRole;
+    if (p.airCount && $("airCount")) $("airCount").value = p.airCount;
+    if (p.spaaCount && $("spaaCount")) $("spaaCount").value = p.spaaCount;
+    if (p.heliCount && $("heliCount")) $("heliCount").value = p.heliCount;
     setChk("incSPAA", p.incSPAA);
     setChk("incHelis", p.incHelis);
     // Prefer the new dropdown value; migrate old level/dive checkbox prefs so a
