@@ -83,7 +83,15 @@ const LINEUP = (() => {
     const helis = pool.filter(u => u.type === "helicopter");
 
     // --- scoring context ---
-    const armorPctRaw = percentiler(mains, u => (u.armorHull ?? 0) + (u.armorTurret ?? 0) * 0.5);
+    // Armor: prefer the effective-armor rating (effArmor), which folds in
+    // composite arrays, ERA, and spall-liners on top of raw steel — so a T-90M
+    // (Relikt + composite) outscores a Maus (pure RHA) even though the Maus has
+    // thicker base steel. Fall back to the old raw-steel formula for the rare
+    // tank with no effArmor (armor.json missing or the tank predates composite).
+    const armorValue = u => u.effArmor > 0
+      ? u.effArmor
+      : (u.armorHull ?? 0) + (u.armorTurret ?? 0) * 0.5;
+    const armorPctRaw = percentiler(mains, armorValue);
     const mobPctRaw = percentiler(mains, u => u.hpPerTon);
     const velPctRaw = percentiler(mains, u => u.gunVel);
     const calPctRaw = percentiler(mains, u => u.gunCal);

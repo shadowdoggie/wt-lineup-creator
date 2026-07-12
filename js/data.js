@@ -27,6 +27,7 @@ const WT_DATA = (() => {
   const MOBILITY_URL = "data/mobility.json";
   const GUNSTATS_URL = "data/gunstats.json";
   const SPAA_URL = "data/spaa.json";
+  const ARMOR_URL = "data/armor.json";
   // Fallback re-download interval, used only when the commit check fails
   // (offline, or GitHub API rate limit of 60 req/h per IP exhausted).
   const MAX_AGE_MS = 24 * 3600 * 1000;
@@ -40,7 +41,7 @@ const WT_DATA = (() => {
   // any change to the unit shape automatically invalidates stale caches — no
   // more remembering to bump a manual "_v2". Add new fields to this string.
   const SCHEMA = "id name country type cls diveBomber rank br premium squadron gift " +
-    "researchPoints armorHull armorTurret hpPerTon gunVel gunCal turnTime " +
+    "researchPoints armorHull armorTurret effArmor hpPerTon gunVel gunCal turnTime " +
     "ordnanceKg atgm atgmRange sam radar aaCal";
   function hash32(s) {
     let h = 2166136261;
@@ -196,6 +197,7 @@ const WT_DATA = (() => {
         gift: !!(w.gift || w.event || w.showOnlyWhenBought),
         armorHull: Array.isArray(shop.armorThicknessHull) ? shop.armorThicknessHull[0] : null,
         armorTurret: Array.isArray(shop.armorThicknessTurret) ? shop.armorThicknessTurret[0] : null,
+        effArmor: 0, // filled from armor.json after load — KE-effective rating
         hpPerTon: null, // filled from mobility.json after load
         gunVel: null,   // filled from gunstats.json after load (best AP shell m/s)
         gunCal: null,   // bore caliber (mm)
@@ -292,19 +294,22 @@ const WT_DATA = (() => {
     if (coverage.mobility === null) warnings.push("Mobility data (mobility.json) didn't load — the Speed playstyle is using a rough fallback.");
     if (coverage.guns === null) warnings.push("Gun data (gunstats.json) didn't load — the Sniper playstyle is using a rough fallback.");
     if (coverage.spaa === null) warnings.push("SPAA data (spaa.json) didn't load — anti-air is ranked by battle rating only.");
+    if (coverage.armor === null) warnings.push("Armor data (armor.json) didn't load — the Armor playstyle is using raw steel thickness only (no ERA/composite).");
     return warnings;
   }
 
-  // Merge precomputed hp/ton, gun, and SPAA stats onto tank units. Done every
-  // load (not baked into the cache) so shipping new data files takes effect
-  // immediately. Each file is optional and fails soft to a fallback. Returns a
-  // coverage report so the caller can flag a file that went missing/empty.
+  // Merge precomputed hp/ton, gun, SPAA, and effective-armor stats onto tank
+  // units. Done every load (not baked into the cache) so shipping new data
+  // files takes effect immediately. Each file is optional and fails soft to a
+  // fallback. Returns a coverage report so the caller can flag a file that
+  // went missing/empty.
   async function attachStats(units) {
     const tanks = units.filter(u => u.type === "tank");
-    const [mob, guns, spaa] = await Promise.all([
+    const [mob, guns, spaa, armor] = await Promise.all([
       fetchJsonSoft(MOBILITY_URL),
       fetchJsonSoft(GUNSTATS_URL),
       fetchJsonSoft(SPAA_URL),
+      fetchJsonSoft(ARMOR_URL),
     ]);
     // No mobility file: Speed playstyle falls back to the armor-inverse proxy.
     if (mob) for (const u of tanks) u.hpPerTon = mob[u.id] ?? null;
@@ -318,10 +323,23 @@ const WT_DATA = (() => {
       const s = spaa[u.id];
       if (s) { u.sam = !!s.sam; u.radar = !!s.radar; u.aaCal = s.cal || null; }
     }
+    // Effective armor: hull/turret steel (from DamageParts, more complete than
+    // the Shop values) + an eff rating folding in composite/ERA/spall-liners.
+    // Falls back to the Shop values when armor.json has 0 for that field, so a
+    // tank with a shop-displayed thickness but no DamageParts plate isn't
+    // blanked. No armor file: Armor playstyle falls back to raw Shop steel only.
+    if (armor) for (const u of tanks) {
+      const a = armor[u.id];
+      if (!a) continue;
+      if (a.h > 0) u.armorHull = a.h;
+      if (a.t > 0) u.armorTurret = a.t;
+      u.effArmor = a.eff || 0;
+    }
     return {
       mobility: mob ? Object.keys(mob).length : null,
       guns: guns ? Object.keys(guns).length : null,
       spaa: spaa ? Object.keys(spaa).length : null,
+      armor: armor ? Object.keys(armor).length : null,
     };
   }
 

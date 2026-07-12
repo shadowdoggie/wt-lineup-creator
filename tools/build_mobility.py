@@ -23,6 +23,16 @@ model file under
                         all-or-nothing. Read straight off the same tankmodel:
                         a surface-to-air missile launcher, a tracking-radar
                         sensor block, and the largest gun caliber.
+  data/armor.json     — id -> {"h": hull_front_mm, "t": turret_front_mm,
+                        "eff": effective_armor_rating} for every tank. The raw
+                        hull/turret numbers are the thickest steel plate on the
+                        front of each, read from DamageParts — they replace the
+                        Shop display values (which are missing for ~15% of tanks,
+                        leaving the old UI with no armor figure for them). The
+                        `eff` rating folds composite armor, ERA, and spall-liners
+                        into a single KE-effective thickness so the Armor
+                        playstyle can tell a T-90M (Relikt ERA + composite) from a
+                        Maus (200mm RHA, nothing else). See _armor_stats_from_model.
         (Aircraft/heli firepower needs no precompute — wpcost pre-aggregates
         ordnance mass and ATGM presence per weapon preset, so the browser scores
         CAS directly.)
@@ -54,6 +64,7 @@ MOBILITY_OUT = os.environ.get(
 )
 GUNSTATS_OUT = os.path.join(os.path.dirname(os.path.abspath(MOBILITY_OUT)), "gunstats.json")
 SPAA_OUT = os.path.join(os.path.dirname(os.path.abspath(MOBILITY_OUT)), "spaa.json")
+ARMOR_OUT = os.path.join(os.path.dirname(os.path.abspath(MOBILITY_OUT)), "armor.json")
 
 # Kinetic armour-piercing shell family (apbc / apcbc / aphebc / apcr / apds /
 # apfsds). Excludes heat / he / smoke / shrapnel — chemical and filler rounds
@@ -206,11 +217,276 @@ def _spaa_stats_from_model(model):
     return {"sam": int(sam), "radar": int(radar), "cal": round(cal, 1)}
 
 
+# --- Effective-armor extraction ------------------------------------------------
+#
+# The Armor playstyle used to score vehicles on raw steel thickness alone
+# (Shop.armorThicknessHull/Turret), which is wrong at top BR: a T-90M (~90mm
+# steel + Relikt ERA + composite) outranked nothing, while a Maus (200mm RHA,
+# no ERA) won the slot. The shop values are also missing for ~15% of tanks,
+# leaving the UI with a blank armor figure.
+#
+# This reads the DamageParts block of the tankmodel — the same file we already
+# fetch for mobility/guns/SPAA — and derives three numbers per vehicle:
+#
+#   h   — raw steel on the hull front (thickest front-facing plate, mm)
+#   t   — raw steel on the turret front (thickest front-facing plate, mm)
+#   eff — an effective-armor rating (mm-equivalent) that adds composite arrays,
+#         ERA tiles, and spall-liners on top of the raw steel
+#
+# The eff rating is intentionally a *ranking score*, not a precise penetration
+# barrier: War Thunder's actual armor model is voxel-based and angle-dependent,
+# so a single number can never be "correct". What we want is for the scorer to
+# rank a T-90M above a T-72B3 above a T-34-85, which raw steel alone can't do.
+#
+# How eff is built (all from DamageParts):
+#   • Start from max(h, t): the thickest raw-steel front is the base.
+#   • Composite arrays (composite_armor_*_dm blocks): each contributes
+#     armorThickness * genericArmorQuality (the KE multiplier the game assigns
+#     to the array — 1.0 ≈ RHA-equivalent, 0.5 ≈ half-effective vs AP). We sum
+#     the front-facing ones only. This captures NERA/composite inserts (Leopard
+#     2A5 wedge, Abrams DU, Chally 2 Dorchester, T-series Fofa).
+#   • ERA (era_* containers with ex_era_*_dm elements, plus blocks carrying
+#     explosionArmorQuality): counted as a flat +15mm-equivalent per ERA element,
+#     scaled by explosionArmorQuality when present. ERA in WT is binary (it
+#     either defeats a shaped-charge jet or it doesn't), so a per-tile bonus
+#     rewards vehicles with more coverage. Kontakt-1/5 and Relikt both register.
+#   • Spall liner (hull_spall_liner with armour_aramide_fabric): +8mm flat. It
+#     reduces behind-armor spall rather than stopping a round, so it's a small
+#     nudge, not a multiplier.
+#
+# The composite and ERA terms are capped so a single huge array can't dominate
+# (e.g. the 800mm Abrams turret composite is a LoS thickness, not 800mm of RHA).
+# Caps: composite bonus ≤ 250mm, ERA bonus ≤ 80mm. This keeps the rating
+# grounded in what a player actually feels in a match.
+#
+# What counts as "composite" vs "raw steel"? The game's `armorClass` field is
+# the authoritative signal. Standard steel classes (RHA, CHA, aluminium,
+# titanium, structural steel, etc.) are raw steel. Anything else — NERA,
+# textolite, spaced_armor, special_armor, composite_armor classes — is a
+# composite/special array. This works game-wide without hardcoding tank names:
+# a Leo 2A5 wedge (class=leopard_2a5_turret_nera), a T-80U insert
+# (class=t_80u_turret_composite_armor), and an Abrams special array
+# (class=hull_side_special_armor) all register, while a Maus's pure RHA
+# (class=RHA_tank) doesn't.
+
+# DamageParts sub-blocks that hold front-facing steel (hull/turret front). The
+# hull/turret containers themselves don't have an armorThickness, but their
+# *_front_dm children do. We look for any child whose key contains "front".
+_FRONT_RE = re.compile(r"front", re.I)
+# Composite array blocks: keys matching composite_armor_* anywhere in DamageParts.
+_COMP_RE = re.compile(r"composite_armor", re.I)
+# ERA containers: keys starting with era_ (era_hull_front, era_turret_front, etc.)
+# and Soviet-style relic_era_* and ex_armor_era_* blocks.
+_ERA_RE = re.compile(r"^(era_|relict_era|ex_armor_era)", re.I)
+# Spall liner: hull_spall_liner block.
+_SPALL_RE = re.compile(r"spall_liner", re.I)
+
+# armorClass values that mean "this is plain steel/aluminium, not composite".
+# Anything NOT matching one of these prefixes is a composite/special array.
+# This is a prefix check (startswith), so "RHA_tank_modern" matches "RHA".
+_STEEL_CLASS_PREFIXES = (
+    "RHA", "CHA", "alum", "titanium", "steel", "tank_structural",
+    "tank_barrel", "tank_trak", "tank_steel", "optics", "armour_aramide",
+    "nbc_liner", "CHA_tank", "abt", "aluminium",
+)
+
+
+def _is_steel_class(armor_class):
+    """True if the armorClass string marks a block as plain steel/aluminium
+    (not composite). None/empty counts as steel — many steel plates have no
+    class at all, and we'd rather count them than miss real front armor."""
+    if not isinstance(armor_class, str) or not armor_class:
+        return True
+    ac = armor_class.lower()
+    return any(ac.startswith(p.lower()) for p in _STEEL_CLASS_PREFIXES)
+
+
+def _iter_damage_parts(dp):
+    """Yield (key, block) for every dict sub-block of DamageParts."""
+    if not isinstance(dp, dict):
+        return
+    for k, v in dp.items():
+        if isinstance(v, dict):
+            yield k, v
+
+
+def _armor_stats_from_model(model):
+    """Effective-armor descriptor for a tank, all from its DamageParts block:
+      h   — thickest front hull steel (mm)
+      t   — thickest front turret steel (mm)
+      eff — KE-effective armor rating (mm-equivalent), folding in composite
+            arrays, ERA, and spall-liners on top of the raw steel base.
+    Returns None only if the model has no DamageParts at all."""
+    dp = model.get("DamageParts")
+    if not isinstance(dp, dict):
+        return None
+
+    # 1) Raw front steel. Front-facing plates (superstructure_front_dm,
+    #    body_front_dm, turret_XX_front_dm, etc.) can live in ANY DamageParts
+    #    sub-block. We scan every sub-block's children for *_front_dm plates.
+    #    A plate counts as raw steel UNLESS:
+    #      a) Its own key matches composite_armor_* and its armorClass is
+    #         non-standard (composite) — it's a composite insert.
+    #      b) Its container's armorClass is non-standard (composite) — the
+    #         whole container is a composite array (e.g. Leo 2A5's NERA wedge
+    #         stored as body_front_dm inside a leopard_2a5_turret_nera container).
+    #    This lets T-80U's superstructure_front_dm (50mm, container class=None)
+    #    count as steel, while Leo 2A5's body_front_dm (400mm, container class=
+    #    leopard_2a5_turret_nera) counts as composite.
+    hull_mm = 0.0
+    turret_mm = 0.0
+    # 2) Composite bonus: accumulated alongside raw steel in the same pass.
+    composite_bonus = 0.0
+    n_composite = 0
+
+    for key, blk in _iter_damage_parts(dp):
+        if not isinstance(blk, dict):
+            continue
+        container_is_composite = not _is_steel_class(blk.get("armorClass"))
+        for k2, v2 in blk.items():
+            if not isinstance(v2, dict) or not _FRONT_RE.search(k2):
+                continue
+            t = v2.get("armorThickness")
+            if not isinstance(t, (int, float)) or t <= 0:
+                continue
+            # Check if this specific plate is composite:
+            # - key matches composite_armor_* AND has a non-steel class, OR
+            # - the container itself is composite-classed
+            plate_is_composite = False
+            if _COMP_RE.search(k2):
+                plate_class = v2.get("armorClass")
+                if not _is_steel_class(plate_class):
+                    plate_is_composite = True
+                # Also check genericArmorQuality — its presence marks a real
+                # composite array even when the class is empty (T-90M's arrays
+                # sometimes have gq but no class).
+                gq = v2.get("genericArmorQuality")
+                if isinstance(gq, (int, float)) and gq > 0:
+                    plate_is_composite = True
+            if container_is_composite and not _COMP_RE.search(k2):
+                # A non-composite-named plate inside a composite container
+                # (Leo 2A5's body_front_dm inside hull_front_composite_armor
+                # with class=leopard_2a5_turret_nera) — the plate IS composite.
+                plate_is_composite = True
+
+            k2l = k2.lower()
+            if plate_is_composite:
+                # Add to composite bonus.
+                gq = v2.get("genericArmorQuality")
+                if isinstance(gq, (int, float)) and gq > 0:
+                    composite_bonus += t * gq
+                else:
+                    # No KE multiplier on record (T-80U's textolite insert,
+                    # Leo 2A5's NERA wedge) — treat as RHA-equivalent (1.0).
+                    composite_bonus += t
+                n_composite += 1
+            else:
+                # Raw steel — attribute by the plate's own name.
+                if "turret" in k2l or "mask" in k2l:
+                    turret_mm = max(turret_mm, t)
+                else:
+                    hull_mm = max(hull_mm, t)
+
+    # Also collect composite_armor_* blocks that are NOT front-facing (some
+    # arrays don't use "front" in their key name but are still front armor).
+    # These appear as children of composite containers or standalone blocks.
+    for key, blk in _iter_damage_parts(dp):
+        if not isinstance(blk, dict):
+            continue
+        for k2, v2 in blk.items() if isinstance(blk, dict) else []:
+            if not isinstance(v2, dict) or not _COMP_RE.search(k2):
+                continue
+            # Skip if already counted as a front plate above.
+            if _FRONT_RE.search(k2):
+                continue
+            t = v2.get("armorThickness")
+            if not isinstance(t, (int, float)) or t <= 10.0:
+                continue
+            gq = v2.get("genericArmorQuality")
+            plate_class = v2.get("armorClass")
+            # Only count if it has gq OR a non-steel class — distinguishes real
+            # composite arrays from structural steel named composite_armor_*.
+            has_gq = isinstance(gq, (int, float)) and gq > 0
+            has_comp_class = not _is_steel_class(plate_class)
+            if has_gq:
+                composite_bonus += t * gq
+                n_composite += 1
+            elif has_comp_class:
+                composite_bonus += t
+                n_composite += 1
+        # Also handle composite containers at the top level directly.
+        if _COMP_RE.search(key) and isinstance(blk, dict):
+            t = blk.get("armorThickness")
+            gq = blk.get("genericArmorQuality")
+            if isinstance(t, (int, float)) and t > 10.0:
+                if isinstance(gq, (int, float)) and gq > 0:
+                    composite_bonus += t * gq
+                    n_composite += 1
+                elif not _is_steel_class(blk.get("armorClass")):
+                    composite_bonus += t
+                    n_composite += 1
+
+    composite_bonus = min(composite_bonus, 250.0)
+
+    # 3) ERA: count tiles and scale by explosionArmorQuality where present.
+    #    Each ex_era_*_dm element is one ERA tile. Containers may carry an
+    #    explosionArmorQuality (the ERA's HE-equivalent rating) which we use as
+    #    a per-tile weight; when absent, default to 1.0 (a generic tile).
+    era_bonus = 0.0
+    n_era = 0
+    for key, blk in _iter_damage_parts(dp):
+        if not _ERA_RE.search(key):
+            continue
+        if not isinstance(blk, dict):
+            continue
+        # Container-level explosionArmorQuality applies to all its tiles.
+        eq = blk.get("explosionArmorQuality")
+        tile_weight = float(eq) if isinstance(eq, (int, float)) and eq > 0 else 1.0
+        for k2, v2 in blk.items():
+            if not isinstance(v2, dict):
+                continue
+            # ex_era_*_dm is the per-tile element; also count ex_armor_* blocks
+            # that carry their own explosionArmorQuality.
+            if "ex_era" in k2.lower() or "ex_armor_era" in k2.lower():
+                n_era += 1
+                era_bonus += 15.0 * tile_weight
+            elif _ERA_RE.search(k2):
+                # Nested era container (relict_era_hull_inner inside era_hull_*).
+                eq2 = v2.get("explosionArmorQuality")
+                tw2 = float(eq2) if isinstance(eq2, (int, float)) and eq2 > 0 else tile_weight
+                for k3, v3 in v2.items():
+                    if isinstance(v3, dict) and "ex_era" in k3.lower():
+                        n_era += 1
+                        era_bonus += 15.0 * tw2
+    era_bonus = min(era_bonus, 80.0)
+
+    # 4) Spall liner: aramide-fabric liner reduces behind-armor spalling. Small
+    #    flat bonus — it's a survivability upgrade, not a penetration barrier.
+    spall_bonus = 0.0
+    for key, blk in _iter_damage_parts(dp):
+        if _SPALL_RE.search(key) and isinstance(blk, dict):
+            ac = blk.get("armorClass", "")
+            if "aramide" in str(ac).lower() or "fabric" in str(ac).lower():
+                spall_bonus = 8.0
+                break
+
+    base = max(hull_mm, turret_mm)
+    if base <= 0 and composite_bonus <= 0 and era_bonus <= 0:
+        # No armor data at all (e.g. open-topped M56). Return zeros so the UI
+        # has something rather than null.
+        return {"h": round(hull_mm, 1), "t": round(turret_mm, 1), "eff": 0.0}
+
+    eff = base + composite_bonus + era_bonus + spall_bonus
+    return {"h": round(hull_mm, 1), "t": round(turret_mm, 1), "eff": round(eff, 1)}
+
+
 def fetch_vehicle(unit_id):
-    """One tankmodel fetch yields hp/ton, gun stats, and (for SPAA) AA stats."""
+    """One tankmodel fetch yields hp/ton, gun stats, (SPAA) AA stats, and
+    effective-armor stats. The model file is the single network hop for all
+    four — armor just reads DamageParts, which is already in memory."""
     model = get_json_ci(f"gamedata/units/tankmodels/{unit_id}.blk")
     if model is None:
-        return unit_id, None, None, None
+        return unit_id, None, None, None, None
 
     vp = model.get("VehiclePhys", {})
     hp = vp.get("engine", {}).get("horsePowers")
@@ -219,7 +495,8 @@ def fetch_vehicle(unit_id):
 
     gun = _gun_stats_from_model(model, _mods_by_id.get(unit_id, frozenset()))
     spaa = _spaa_stats_from_model(model) if unit_id in _spaa_ids else None
-    return unit_id, hpt, gun, spaa
+    armor = _armor_stats_from_model(model)
+    return unit_id, hpt, gun, spaa, armor
 
 
 def _guard_regression(label, new_count, path):
@@ -266,16 +543,18 @@ def main():
     )
     print(f"{len(tanks)} tanks ({len(_spaa_ids)} SPAA) — fetching model + gun files…")
 
-    mobility, guns, spaa = {}, {}, {}
+    mobility, guns, spaa, armor = {}, {}, {}, {}
     mob_miss, gun_miss = [], []
     done = 0
     with cf.ThreadPoolExecutor(max_workers=24) as ex:
-        for uid, hpt, gun, aa in ex.map(fetch_vehicle, tanks):
+        for uid, hpt, gun, aa, ar in ex.map(fetch_vehicle, tanks):
             done += 1
             (mobility.__setitem__(uid, hpt) if hpt is not None else mob_miss.append(uid))
             (guns.__setitem__(uid, gun) if gun is not None else gun_miss.append(uid))
             if aa is not None:
                 spaa[uid] = aa
+            if ar is not None:
+                armor[uid] = ar
             if done % 200 == 0:
                 print(f"  {done}/{len(tanks)}")
 
@@ -291,10 +570,12 @@ def main():
         )
     _guard_regression("gunstats", len(guns), GUNSTATS_OUT)
     _guard_regression("spaa", len(spaa), SPAA_OUT)
+    _guard_regression("armor", len(armor), ARMOR_OUT)
 
     _atomic_write(MOBILITY_OUT, dict(sorted(mobility.items())))
     _atomic_write(GUNSTATS_OUT, dict(sorted(guns.items())))
     _atomic_write(SPAA_OUT, dict(sorted(spaa.items())))
+    _atomic_write(ARMOR_OUT, dict(sorted(armor.items())))
 
     print(f"\nWrote {len(mobility)} entries to {os.path.basename(MOBILITY_OUT)} "
           f"({len(mob_miss)} without physics data)")
@@ -303,6 +584,9 @@ def main():
     sam_n = sum(v["sam"] for v in spaa.values())
     print(f"Wrote {len(spaa)}/{len(_spaa_ids)} SPAA entries to "
           f"{os.path.basename(SPAA_OUT)} ({sam_n} with SAMs)")
+    era_n = sum(1 for v in armor.values() if v.get("eff", 0) > max(v.get("h", 0), v.get("t", 0)))
+    print(f"Wrote {len(armor)} entries to {os.path.basename(ARMOR_OUT)} "
+          f"({era_n} with ERA/composite beyond raw steel)")
     if gun_miss:
         print("No-AP vehicles:", ", ".join(gun_miss[:15]) + (" …" if len(gun_miss) > 15 else ""))
 

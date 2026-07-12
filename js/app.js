@@ -255,7 +255,15 @@
       // 0 mm here, and a shield icon next to 0 reads oddly — omit it instead.
       if (u.armorHull) armor.push(`H ${u.armorHull}`);
       if (u.armorTurret) armor.push(`T ${u.armorTurret}`);
-      if (armor.length) bits.push(stat("Frontal armor (mm)", `${ico("i-shield")} ${armor.join(" / ")}`));
+      if (armor.length) {
+        // When effArmor exceeds the raw steel, the tank has ERA/composite/spall
+        // — show the effective rating so the user understands why a T-90M
+        // (steel ~80mm) ranks above a Maus (steel ~232mm) for the Armor playstyle.
+        const title = u.effArmor > Math.max(u.armorHull ?? 0, u.armorTurret ?? 0)
+          ? `Frontal armor (mm) · effective ${u.effArmor} incl. ERA/composite`
+          : "Frontal armor (mm)";
+        bits.push(stat(title, `${ico("i-shield")} ${armor.join(" / ")}`));
+      }
       if (u.gunVel != null) bits.push(stat(`Fastest AP shell muzzle velocity${u.gunCal ? ` · ${u.gunCal}mm bore` : ""}`, `${ico("i-target")} ${u.gunVel} m/s`));
     } else if (slot.category === "spaa") {
       if (u.sam) bits.push(stat("Carries surface-to-air missiles", `${ico("i-missile")} SAM`));
