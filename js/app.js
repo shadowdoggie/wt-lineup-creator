@@ -142,6 +142,7 @@
       if (u.armorHull != null) armor.push(`H ${u.armorHull}`);
       if (u.armorTurret != null) armor.push(`T ${u.armorTurret}`);
       if (armor.length) bits.push(`<span title="Frontal armor (mm)">🛡️ ${armor.join(" / ")}</span>`);
+      if (u.gunVel != null) bits.push(`<span title="Fastest AP shell muzzle velocity${u.gunCal ? ` · ${u.gunCal}mm bore` : ""}">🎯 ${u.gunVel} m/s</span>`);
     } else if (slot.category === "fighter") {
       if (u.turnTime != null) bits.push(`<span title="Sustained turn time">↻ ${u.turnTime}s turn</span>`);
     } else if (slot.category === "attacker") {

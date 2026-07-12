@@ -26,7 +26,9 @@ const LINEUP = (() => {
     },
     sniper: {
       classW: { td: 1.0, medium: 0.7, heavy: 0.5, light: 0.45 },
-      stat: (u, p) => 0.2 * p.armorPct(u),
+      // Real gun data: a flat-shooting, big-bore gun is what makes a sniper.
+      // 60% muzzle velocity (flat trajectory, minimal lead) + 40% bore caliber.
+      stat: (u, p) => 0.6 * p.velPct(u) + 0.4 * p.calPct(u),
     },
   };
 
@@ -71,11 +73,17 @@ const LINEUP = (() => {
     // --- scoring context ---
     const armorPctRaw = percentiler(mains, u => (u.armorHull ?? 0) + (u.armorTurret ?? 0) * 0.5);
     const mobPctRaw = percentiler(mains, u => u.hpPerTon);
+    const velPctRaw = percentiler(mains, u => u.gunVel);
+    const calPctRaw = percentiler(mains, u => u.gunCal);
     const p = {
       armorPct: u => armorPctRaw(u) ?? 0.5,
       // Real hp/ton percentile; for the rare vehicle missing it, fall back to
       // "lighter armor ≈ faster" so Speed still ranks it sensibly.
       mobPct: u => mobPctRaw(u) ?? (1 - (armorPctRaw(u) ?? 0.5)),
+      // Real gun velocity / bore percentiles. A vehicle with no AP round
+      // (missile/HE-only) is a poor sniper, so missing data falls below median.
+      velPct: u => velPctRaw(u) ?? 0.35,
+      calPct: u => calPctRaw(u) ?? 0.35,
     };
     // BR closeness still matters (avoid heavy downtiers) but the playstyle
     // stat is now a co-equal driver, so Speed really favors high hp/ton etc.
