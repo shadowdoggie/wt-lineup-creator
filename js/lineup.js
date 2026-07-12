@@ -15,12 +15,13 @@ const LINEUP = (() => {
   const SPADED = {
     short: "Spaded",
     title:
-      "Assumes a fully upgraded vehicle: best researchable AP shell, unlockable " +
-      "ERA/armor packs (e.g. T-80B Kontakt-1), thermal/NV upgrades, and other " +
-      "protection mods present in the game files. Stock reload is the exception.",
+      "Uses values from the game files for a fully unlocked vehicle: best AP shell " +
+      "with an ArmorPower table, ERA/composite presence if in the model, thermal/NV " +
+      "upgrades. Pen is never estimated. Stock reload is the exception (not crew-trained).",
     note:
-      "Vehicle stats assume a spaded (fully modified) tank or aircraft — best AP " +
-      "shell, researchable ERA/armor packs, and optic upgrades. Reload time is stock.",
+      "Stats are factual game-file values for a spaded vehicle (ArmorPower pen, steel " +
+      "thickness, ERA/composite flags, optics). Missing pen means no ArmorPower table — " +
+      "not an estimate. Reload time is stock.",
   };
 
   // Ground playstyles. `stat` returns a 0..1 bonus from the vehicle's real
@@ -35,12 +36,12 @@ const LINEUP = (() => {
     },
     armor: {
       classW: { heavy: 1.0, medium: 0.8, td: 0.6, light: 0.15 },
-      // Armor + reload: a fast-reloading tank brawls better. 70% effective
-      // armor + 15% reload + 15% crew (more survivors in a brawl).
-      // effArmor includes researchable ERA packs when present in the model.
-      stat: (u, p) => 0.7 * p.armorPct(u) + 0.15 * p.reloadPct(u) + 0.15 * p.crewPct(u),
+      // Factual frontal steel + ERA/composite flags from the model (not invented mm).
+      stat: (u, p) =>
+        0.55 * p.armorPct(u) + 0.15 * p.reloadPct(u) + 0.1 * p.crewPct(u) +
+        (u.hasEra ? 0.15 : 0) + (u.hasComposite ? 0.05 : 0),
       variety: false, // mono-class wall is the point
-      desc: "Heavy wall. Effective armor (incl. unlockable ERA/composite), reload & crew. Spaded. No class-mix damping.",
+      desc: "Heavy wall. Frontal steel thickness + ERA/composite presence (factual), reload & crew. No class-mix damping.",
     },
     speed: {
       classW: { light: 1.0, medium: 0.85, td: 0.5, heavy: 0.1 },
@@ -57,7 +58,7 @@ const LINEUP = (() => {
         return 0.55 * p.penPct(u) + 0.3 * p.velPct(u) + 0.15 * p.calPct(u);
       },
       variety: false,
-      desc: "Long-range KE punch. Best AP pen at 1 km (spaded shell), velocity & caliber. Missile-only TDs are heavily penalized.",
+      desc: "ArmorPower pen table at 1 km when present (never estimated), else velocity/caliber. Missile-only TDs heavily penalized.",
     },
   };
 
@@ -132,15 +133,18 @@ const LINEUP = (() => {
     const helis = pool.filter(u => u.type === "helicopter");
 
     // --- scoring context ---
-    // Armor: prefer the effective-armor rating (effArmor), which folds in
-    // composite arrays, ERA, and spall-liners on top of raw steel.
-    const armorValue = u => u.effArmor > 0
-      ? u.effArmor
-      : (u.armorHull ?? 0) + (u.armorTurret ?? 0) * 0.5;
-    const armorPctRaw = percentiler(mains, armorValue);
+    // Armor: factual frontal steel only (thickest of hull/turret front). ERA and
+    // composite are separate boolean bonuses in the Armor playstyle — never
+    // converted into a fake "effective mm".
+    const armorValue = u => Math.max(u.armorHull ?? 0, u.armorTurret ?? 0);
+    const armorPctRaw = percentiler(mains, u => {
+      const a = armorValue(u);
+      return a > 0 ? a : null;
+    });
     const mobPctRaw = percentiler(mains, u => u.hpPerTon);
     const velPctRaw = percentiler(mains, u => u.gunVel);
     const calPctRaw = percentiler(mains, u => u.gunCal);
+    // Pen only when ArmorPower table exists (gunPen set). No estimates.
     const penPctRaw = percentiler(mains, u => u.gunPen);
     // Reload: don't mix autoloaders (~≤6s) with manual loaders in one percentile.
     // Autoloaders get a high fixed band; manuals are ranked among themselves.
@@ -150,29 +154,28 @@ const LINEUP = (() => {
     const turretPctRaw = percentiler(mains, u => u.turretSpeed ?? null);
     const crewPctRaw = percentiler(mains, u => u.crewCount ?? null);
 
-    // Missing-data fallbacks: neutral 0.5 for mobility/crew; 0.35 for missing
-    // guns (below median — a missile/HE-only vehicle is a poor sniper).
+    // Missing stats: only score with real values. Null components contribute 0
+    // to playstyles that need them (sniper without ArmorPower pen), not a fake
+    // "0.35 median" guess.
     const p = {
-      armorPct: u => armorPctRaw(u) ?? 0.5,
-      mobPct: u => mobPctRaw(u) ?? (1 - (armorPctRaw(u) ?? 0.5)),
-      velPct: u => velPctRaw(u) ?? 0.35,
-      calPct: u => calPctRaw(u) ?? 0.35,
-      penPct: u => penPctRaw(u) ?? 0.35,
+      armorPct: u => armorPctRaw(u) ?? 0,
+      mobPct: u => mobPctRaw(u) ?? 0,
+      velPct: u => velPctRaw(u) ?? 0,
+      calPct: u => calPctRaw(u) ?? 0,
+      penPct: u => penPctRaw(u) ?? 0,
       reloadPct: u => {
-        if (u.reloadTime == null) return 0.5;
+        if (u.reloadTime == null) return 0;
         if (u.reloadTime <= 6) return 0.88 + Math.min(0.12, (6 - u.reloadTime) / 50);
-        return manualReloadPct(u) ?? 0.5;
+        return manualReloadPct(u) ?? 0;
       },
-      revPct: u => revPctRaw(u) ?? 0.5,
-      turretPct: u => turretPctRaw(u) ?? 0.5,
-      crewPct: u => crewPctRaw(u) ?? 0.5,
+      revPct: u => revPctRaw(u) ?? 0,
+      turretPct: u => turretPctRaw(u) ?? 0,
+      crewPct: u => crewPctRaw(u) ?? 0,
     };
 
-    // Uptier fightability: can this gun pen the armor you'll meet at target+1.0?
-    // Use the 75th percentile of medium/heavy/TD effective armor in
-    // [target, target+1] (any nation) so lights/IFVs don't drag the bar down.
-    // Pure in-bracket percentiles can't tell "best of a weak bracket" from
-    // "actually fights uptiers."
+    // Uptier fightability: factual ArmorPower pen vs 75th-percentile frontal
+    // steel of medium/heavy/TDs in [target, target+1]. Both numbers come from
+    // game files — not synthetic effective armor.
     const uptierArmor = [];
     for (const u of units) {
       if (u.type !== "tank" || u.cls === "spaa" || u.cls === "light") continue;
@@ -184,10 +187,9 @@ const LINEUP = (() => {
     uptierArmor.sort((a, b) => a - b);
     const needArmor = uptierArmor.length
       ? uptierArmor[Math.min(uptierArmor.length - 1, Math.floor(uptierArmor.length * 0.75))]
-      : (80 + o.targetBR * 45);
+      : null;
     const fightUptier = u => {
-      if (u.gunPen == null || u.gunPen <= 0) return 0.15;
-      // pen == need → ~0.65; pen == 1.5×need → ~1.0.
+      if (u.gunPen == null || u.gunPen <= 0 || needArmor == null) return 0;
       const ratio = u.gunPen / Math.max(needArmor, 1);
       return Math.max(0, Math.min(1, ratio * 0.65));
     };

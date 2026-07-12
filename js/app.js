@@ -294,21 +294,16 @@
     if (u.type === "tank" && slot.category !== "spaa") {
       if (u.hpPerTon != null) bits.push(stat("Real horsepower-per-ton", `${ico("i-gauge")} ${u.hpPerTon} hp/t`));
       const armor = [];
-      // Truthy (not `!= null`): an open-top / unarmored vehicle like the M56 has
-      // 0 mm here, and a shield icon next to 0 reads oddly — omit it instead.
+      // Truthy (not `!= null`): open-top vehicles with 0 mm omit the shield line.
       if (u.armorHull) armor.push(`H ${u.armorHull}`);
       if (u.armorTurret) armor.push(`T ${u.armorTurret}`);
       if (armor.length) {
-        // When effArmor exceeds the raw steel, the tank has ERA/composite/spall
-        // — show the effective rating so the user understands why a T-90M
-        // (steel ~80mm) ranks above a Maus (steel ~232mm) for the Armor playstyle.
-        const title = u.effArmor > Math.max(u.armorHull ?? 0, u.armorTurret ?? 0)
-          ? `Frontal steel (mm). Ranking armor ~${u.effArmor} (approx. incl. ERA/composite — not exact in-game pen; spaded packs counted)`
-          : "Frontal armor (mm)";
-        bits.push(stat(title, `${ico("i-shield")} ${armor.join(" / ")}`));
+        bits.push(stat("Frontal steel thickness (mm) from the tank model", `${ico("i-shield")} ${armor.join(" / ")}`));
       }
+      if (u.hasEra) bits.push(stat("ERA present on the model (spaded packs included)", `${ico("i-shield")} ERA`));
+      if (u.hasComposite) bits.push(stat("Composite / NERA arrays present on the model", `${ico("i-shield")} Composite`));
       if (u.stabilized) bits.push(stat("Gun stabilizer — can shoot on the move", `${ico("i-bolt")} Stab`));
-      if (u.thermal) bits.push(stat("Thermal imaging (assumes researchable optic upgrades)", `${ico("i-scope")} Thermal`));
+      if (u.thermal) bits.push(stat("Thermal imaging (researchable upgrades counted)", `${ico("i-scope")} Thermal`));
       else if (u.nv) bits.push(stat("Night vision", `${ico("i-scope")} NV`));
       if (u.reloadTime != null) {
         const auto = u.reloadTime <= 6;
@@ -316,9 +311,15 @@
           `${ico("i-refresh")} ${u.reloadTime}s${auto ? " auto" : ""}`));
       }
       if (u.crewCount != null) bits.push(stat("Crew count", `${ico("i-users")} ${u.crewCount}`));
-      if (u.gunVel != null) {
-        const penStr = u.gunPen != null ? ` · ${u.gunPen}mm pen` : "";
-        bits.push(stat(`Best researchable AP shell (spaded)${u.gunCal ? ` · ${u.gunCal}mm bore` : ""}${penStr ? ` · ~${u.gunPen}mm pen at 1km` : ""}`, `${ico("i-target")} ${u.gunVel} m/s${penStr}`));
+      if (u.gunVel != null || u.gunPen != null) {
+        // Pen only when ArmorPower1000m exists in the shell file — never estimated.
+        const parts = [];
+        if (u.gunVel != null) parts.push(`${u.gunVel} m/s`);
+        if (u.gunPen != null) parts.push(`${u.gunPen}mm pen`);
+        const title = u.gunPen != null
+          ? `Best equippable AP shell — muzzle velocity + ArmorPower pen at 1 km (game table, spaded shell)`
+          : `Best equippable AP shell — muzzle velocity${u.gunCal ? ` · ${u.gunCal}mm bore` : ""} (no ArmorPower pen table in files)`;
+        bits.push(stat(title, `${ico("i-target")} ${parts.join(" · ")}`));
       }
     } else if (slot.category === "spaa") {
       if (u.sam) bits.push(stat("Carries surface-to-air missiles", `${ico("i-missile")} SAM`));
@@ -341,14 +342,11 @@
   }
 
   function needsSpadedNote(u) {
-    // Only show where unlockables actually change the score: modern optics,
-    // ERA beyond steel, top AP shells, or air loadouts.
+    // Only where unlockables affect displayed/scored facts.
     if (u.type === "aircraft" || u.type === "helicopter") return true;
     if (u.type !== "tank") return false;
-    if (u.thermal) return true;
+    if (u.thermal || u.hasEra || u.hasComposite) return true;
     if (u.gunPen != null && u.rank >= 4) return true;
-    const raw = Math.max(u.armorHull ?? 0, u.armorTurret ?? 0);
-    if (u.effArmor > raw && u.effArmor > 0) return true;
     return false;
   }
 

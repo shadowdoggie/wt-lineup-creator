@@ -9,36 +9,18 @@ model file under
                         caps its `speed` field, so real mobility comes from the
                         physics block here.
   data/gunstats.json  — id -> {"v": muzzle velocity m/s, "c": bore mm,
-                        "p": penetration mm at 1000m}. Drives the Sniper
-                        playstyle. Penetration IS stored in the shell files
-                        (armorpower block: ArmorPower0m / ArmorPower500m /
-                        ArmorPower1000m arrays where [0] is penetration mm), so
-                        we read the best AP shell's penetration at 1000m
-                        directly — no DeMarre proxy needed. Reaching them needs
-                        one extra hop per gun: tankmodel -> commonWeapons
-                        cannon .blk -> shell definitions (weapon files are
-                        cached since many vehicles share a gun).
+                        "p": penetration mm at 1000m}. `p` is ONLY written when
+                        the shell has an ArmorPower1000m table (the value the
+                        game client uses). No Lanz-Odermatt/DeMarre estimates.
   data/spaa.json      — id -> {"sam": 0/1, "radar": 0/1, "cal": mm} for SPAA
-                        only. Lets the app rank anti-air by real capability
-                        (a radar SAM launcher vs a WWII quad-MG) instead of
-                        all-or-nothing. Read straight off the same tankmodel:
-                        a surface-to-air missile launcher, a tracking-radar
-                        sensor block, and the largest gun caliber.
+                        only. Read straight off the tankmodel: SAM launcher,
+                        tracking-radar sensor, largest gun caliber.
   data/armor.json     — id -> {"h": hull_front_mm, "t": turret_front_mm,
-                        "eff": effective_armor_rating, "stab": 0/1, "thermal":
-                        0/1, "nv": 0/1, "rev": 0..1} for every tank. The raw
-                        hull/turret numbers are the thickest steel plate on the
-                        front of each, read from DamageParts — they replace the
-                        Shop display values (which are missing for ~15% of
-                        tanks, leaving the old UI with no armor figure for them).
-                        The `eff` rating folds composite armor, ERA, and
-                        spall-liners into a single KE-effective thickness so the
-                        Armor playstyle can tell a T-90M (Relikt ERA + composite)
-                        from a Maus (200mm RHA, nothing else). See
-                        _armor_stats_from_model. `stab` is gun stabilization
-                        presence, `thermal`/`nv` are thermal imaging / night
-                        vision, `rev` is reverse speed as a fraction of forward
-                        speed (from gear ratios).
+                        "era": 0/1, "comp": 0/1, "stab": 0/1, "thermal": 0/1,
+                        "nv": 0/1, "rev": 0..1}. All factual from the model:
+                        thickest front steel plates, whether ERA tiles /
+                        composite arrays exist, stabilizer, optics, reverse
+                        ratio. No synthetic "effective mm" rating.
         (Aircraft/heli firepower needs no precompute — wpcost pre-aggregates
         ordnance mass and ATGM presence per weapon preset, so the browser scores
         CAS directly.)
@@ -176,56 +158,19 @@ def _armor_power_at(armorpower, distance_m):
     return best
 
 
-def _hitpower_retention(bullet, distance_m=1000.0, default=0.9):
-    hp = bullet.get("hitpower") or bullet.get("hitPower") or {}
-    if not isinstance(hp, dict):
-        return default
-    exact = hp.get(f"HitPower{int(distance_m)}m")
-    if isinstance(exact, list) and exact and isinstance(exact[0], (int, float)):
-        return float(exact[0])
-    return default
-
-
 def _shell_pen_1000m(bullet, speed, cal_m):
-    """Best available 1000m RHA pen for an AP shell, in mm.
+    """Factual RHA pen (mm) from the shell's armorpower table only.
 
-    Priority:
-      1. armorpower table (authoritative — what the client shows)
-      2. Lanz-Odermatt for long-rod APFSDS (no armorpower table)
-      3. DeMarre for WWII solid shot
+    Prefer ArmorPower1000m (what the client usually shows at range). If that
+    row is missing but other ArmorPower distances exist, use the nearest
+    tabulated value (still a game-authored number — never LO/DeMarre).
     """
-    # 1) Tabulated armorpower (3BM12/15/22 etc. store real ~400mm values here).
     ap = bullet.get("armorpower") or bullet.get("armorPower")
     table = _armor_power_at(ap, 1000.0)
     if table is not None and table > 10:
         # HEAT stock shells sometimes ship a near-zero kinetic armorpower table
         # (e.g. ArmorPower0m: [5.0, 10.0]); ignore those junk rows.
         return round(table)
-
-    dmg = bullet.get("damage", {})
-    kin = dmg.get("kinetic", {}) if isinstance(dmg, dict) else {}
-    lo_len = kin.get("lanzOdermattWorkingLength")
-    lo_density = kin.get("lanzOdermattDensity")
-
-    # 2) Lanz-Odermatt long-rod fallback. The naive formula
-    #    pen = workingLength × (density / 7850) over-predicts by ~2–2.5×
-    #    (T-72M2 Moderna 3BM42 was showing 1083mm). Use the hydrodynamic
-    #    sqrt(density ratio) form scaled to match known ArmorPower shells:
-    #    3BM42 (L=540, ρ=17500) → ~440mm at 1000m.
-    if isinstance(lo_len, (int, float)) and isinstance(lo_density, (int, float)) and lo_len > 0:
-        density_ratio = max(lo_density, 1.0) / 7850.0
-        pen_0m = lo_len * (density_ratio ** 0.5) * 0.55
-        retention = _hitpower_retention(bullet, 1000.0, 0.9)
-        # APFSDS velocity loss barely hurts pen; keep retention mild.
-        return round(pen_0m * (0.85 + 0.15 * retention))
-
-    # 3) DeMarre for solid-shot WWII shells (calibrated to 88mm KwK36 ≈ 203mm @ 0m).
-    if speed and isinstance(bullet.get("mass"), (int, float)) and cal_m:
-        mass = bullet["mass"]
-        cal_mm = cal_m * 1000
-        pen_0m = 0.00211 * (mass ** 0.71) * (speed ** 1.43) * (cal_mm ** 0.07)
-        retention = _hitpower_retention(bullet, 1000.0, 0.9)
-        return round(pen_0m * (retention ** 1.43))
     return None
 
 
@@ -534,58 +479,31 @@ def _armor_stats_from_model(model):
                     composite_bonus += t
                     n_composite += 1
 
-    composite_bonus = min(composite_bonus, 250.0)
-
-    # 3) ERA: count tiles and scale by explosionArmorQuality where present.
-    #    Each ex_era_*_dm element is one ERA tile. Containers may carry an
-    #    explosionArmorQuality (the ERA's HE-equivalent rating) which we use as
-    #    a per-tile weight; when absent, default to 1.0 (a generic tile).
-    era_bonus = 0.0
+    # 3) ERA presence only (factual). We do NOT invent mm-equivalent bonuses.
     n_era = 0
     for key, blk in _iter_damage_parts(dp):
         if not _ERA_RE.search(key):
             continue
         if not isinstance(blk, dict):
             continue
-        # Container-level explosionArmorQuality applies to all its tiles.
-        eq = blk.get("explosionArmorQuality")
-        tile_weight = float(eq) if isinstance(eq, (int, float)) and eq > 0 else 1.0
         for k2, v2 in blk.items():
             if not isinstance(v2, dict):
                 continue
-            # ex_era_*_dm is the per-tile element; also count ex_armor_* blocks
-            # that carry their own explosionArmorQuality.
             if "ex_era" in k2.lower() or "ex_armor_era" in k2.lower():
                 n_era += 1
-                era_bonus += 15.0 * tile_weight
             elif _ERA_RE.search(k2):
-                # Nested era container (relict_era_hull_inner inside era_hull_*).
-                eq2 = v2.get("explosionArmorQuality")
-                tw2 = float(eq2) if isinstance(eq2, (int, float)) and eq2 > 0 else tile_weight
                 for k3, v3 in v2.items():
                     if isinstance(v3, dict) and "ex_era" in k3.lower():
                         n_era += 1
-                        era_bonus += 15.0 * tw2
-    era_bonus = min(era_bonus, 80.0)
 
-    # 4) Spall liner: aramide-fabric liner reduces behind-armor spalling. Small
-    #    flat bonus — it's a survivability upgrade, not a penetration barrier.
-    spall_bonus = 0.0
-    for key, blk in _iter_damage_parts(dp):
-        if _SPALL_RE.search(key) and isinstance(blk, dict):
-            ac = blk.get("armorClass", "")
-            if "aramide" in str(ac).lower() or "fabric" in str(ac).lower():
-                spall_bonus = 8.0
-                break
-
-    base = max(hull_mm, turret_mm)
-    if base <= 0 and composite_bonus <= 0 and era_bonus <= 0:
-        # No armor data at all (e.g. open-topped M56). Return zeros so the UI
-        # has something rather than null.
-        return {"h": round(hull_mm, 1), "t": round(turret_mm, 1), "eff": 0.0}
-
-    eff = base + composite_bonus + era_bonus + spall_bonus
-    return {"h": round(hull_mm, 1), "t": round(turret_mm, 1), "eff": round(eff, 1)}
+    # Factual armor descriptor: steel thicknesses + boolean protection features.
+    # No synthetic "eff" mm — that was a ranking invention, not a game value.
+    return {
+        "h": round(hull_mm, 1),
+        "t": round(turret_mm, 1),
+        "era": 1 if n_era > 0 else 0,
+        "comp": 1 if n_composite > 0 else 0,
+    }
 
 
 def _stabilized(model):
@@ -850,10 +768,13 @@ def main():
     sam_n = sum(v["sam"] for v in spaa.values())
     print(f"Wrote {len(spaa)}/{len(_spaa_ids)} SPAA entries to "
           f"{os.path.basename(SPAA_OUT)} ({sam_n} with SAMs)")
-    era_n = sum(1 for v in armor.values() if v.get("eff", 0) > max(v.get("h", 0), v.get("t", 0)))
+    era_n = sum(1 for v in armor.values() if v.get("era"))
+    comp_n = sum(1 for v in armor.values() if v.get("comp"))
+    pen_n = sum(1 for v in guns.values() if isinstance(v, dict) and v.get("p"))
     print(f"Wrote {len(armor)} entries to {os.path.basename(ARMOR_OUT)} "
-          f"({era_n} with ERA/composite beyond raw steel; "
+          f"({era_n} with ERA, {comp_n} with composite; "
           f"{thermal_n} thermal, {nv_n} night-vision, {stab_n} stabilized)")
+    print(f"Gun pen from ArmorPower tables: {pen_n}/{len(guns)} (others have vel/cal only)")
     if gun_miss:
         print("No-AP vehicles:", ", ".join(gun_miss[:15]) + (" …" if len(gun_miss) > 15 else ""))
 

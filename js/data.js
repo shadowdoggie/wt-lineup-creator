@@ -45,11 +45,11 @@ const WT_DATA = (() => {
   // without its field name changing (e.g. name-marker stripping below), so
   // already-cached clients re-parse instead of serving the old-format value.
   const SCHEMA = "id name country type cls diveBomber rank br premium squadron gift " +
-    "researchPoints armorHull armorTurret effArmor stabilized thermal nv revRatio " +
+    "researchPoints armorHull armorTurret hasEra hasComposite stabilized thermal nv revRatio " +
     "hpPerTon gunVel gunCal gunPen turnTime maxSpeed climbRate " +
     "crewCount reloadTime turretSpeed " +
     "ordnanceKg atgm atgmRange aam arh cm sam radar aaCal " +
-    "fmt:name-markers-stripped;air:same-preset-firepower+aam";
+    "fmt:factual-only-pen-armor;air:same-preset-firepower+aam";
   function hash32(s) {
     let h = 2166136261;
     for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
@@ -266,8 +266,8 @@ const WT_DATA = (() => {
         gift: !!(w.gift || w.event || w.showOnlyWhenBought),
         armorHull: Array.isArray(shop.armorThicknessHull) ? shop.armorThicknessHull[0] : null,
         armorTurret: Array.isArray(shop.armorThicknessTurret) ? shop.armorThicknessTurret[0] : null,
-        // Ranking score from armor.json (ERA/composite folded in) — not exact pen.
-        effArmor: 0,
+        hasEra: false,       // armor.json — ERA tiles present in model
+        hasComposite: false, // armor.json — composite/NERA arrays present
         stabilized: false,
         thermal: false,
         nv: false,
@@ -275,7 +275,7 @@ const WT_DATA = (() => {
         hpPerTon: null,
         gunVel: null,
         gunCal: null,
-        gunPen: null,
+        gunPen: null, // only ArmorPower1000m from shell files (null if absent)
         sam: false,
         radar: false,
         aaCal: null,
@@ -387,10 +387,10 @@ const WT_DATA = (() => {
       }
     }
     // Precomputed stat files: a null means the fetch failed (missing/renamed).
-    if (coverage.mobility === null) warnings.push("Mobility data (mobility.json) didn't load — the Speed playstyle is using a rough fallback.");
-    if (coverage.guns === null) warnings.push("Gun data (gunstats.json) didn't load — the Sniper playstyle is using a rough fallback.");
+    if (coverage.mobility === null) warnings.push("Mobility data (mobility.json) didn't load — Speed ranking has no hp/ton values.");
+    if (coverage.guns === null) warnings.push("Gun data (gunstats.json) didn't load — Sniper ranking has no pen/velocity values.");
     if (coverage.spaa === null) warnings.push("SPAA data (spaa.json) didn't load — anti-air is ranked by battle rating only.");
-    if (coverage.armor === null) warnings.push("Armor data (armor.json) didn't load — the Armor playstyle is using raw steel thickness only (no ERA/composite).");
+    if (coverage.armor === null) warnings.push("Armor data (armor.json) didn't load — Armor ranking has no steel/ERA flags.");
     return warnings;
   }
 
@@ -419,15 +419,15 @@ const WT_DATA = (() => {
       const s = spaa[u.id];
       if (s) { u.sam = !!s.sam; u.radar = !!s.radar; u.aaCal = s.cal || null; }
     }
-    // Effective armor: hull/turret steel (from DamageParts, more complete than
-    // the Shop values) + an eff rating folding in composite/ERA/spall-liners.
-    // Also carries stabilization, thermals/NV, and reverse-speed ratio.
+    // Factual armor: steel plate thicknesses + ERA/composite presence flags +
+    // stab/thermals/NV/reverse. No synthetic "effective mm".
     if (armor) for (const u of tanks) {
       const a = armor[u.id];
       if (!a) continue;
       if (a.h > 0) u.armorHull = a.h;
       if (a.t > 0) u.armorTurret = a.t;
-      u.effArmor = a.eff || 0;
+      u.hasEra = !!a.era;
+      u.hasComposite = !!a.comp;
       u.stabilized = !!a.stab;
       u.thermal = !!a.thermal;
       u.nv = !!a.nv;
