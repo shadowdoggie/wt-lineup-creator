@@ -31,7 +31,7 @@
 
   // Form state is remembered across page reloads (see save/loadPrefs). Bump the
   // key if the set of saved fields changes in an incompatible way.
-  const PREFS_KEY = "wtlc_prefs_v3";
+  const PREFS_KEY = "wtlc_prefs_v4";
 
   /* ---------- data loading ---------- */
 
@@ -153,12 +153,10 @@
       mode: state.mode,
       targetBR: parseFloat($("targetBR").value),
       slots: Math.max(1, Math.min(12, parseInt($("slots").value, 10) || 5)),
-      incSPAA: $("incSPAA").checked,
-      incHelis: $("incHelis").checked,
       planeRole: $("planeRole").value,
       airCount: $("airCount")?.value || "auto",
       spaaCount: $("spaaCount")?.value || "auto",
-      heliCount: $("heliCount")?.value || "auto",
+      heliCount: $("heliCount")?.value || "0",
       levelBombersCAS: casType === "level" || casType === "both",
       diveBombersCAS: casType === "dive" || casType === "both",
       incPremium: $("incPremium").checked,
@@ -189,12 +187,10 @@
       mode: state.mode,
       targetBR: $("targetBR").value,
       slots: $("slots").value,
-      incSPAA: $("incSPAA").checked,
-      incHelis: $("incHelis").checked,
       planeRole: $("planeRole").value,
       airCount: $("airCount")?.value || "auto",
       spaaCount: $("spaaCount")?.value || "auto",
-      heliCount: $("heliCount")?.value || "auto",
+      heliCount: $("heliCount")?.value || "0",
       casType: $("casType").value,
       incPremium: $("incPremium").checked,
       incSquadron: $("incSquadron").checked,
@@ -225,10 +221,17 @@
     if (p.slots != null && p.slots !== "") $("slots").value = p.slots;
     if (p.planeRole) $("planeRole").value = p.planeRole;
     if (p.airCount && $("airCount")) $("airCount").value = p.airCount;
-    if (p.spaaCount && $("spaaCount")) $("spaaCount").value = p.spaaCount;
-    if (p.heliCount && $("heliCount")) $("heliCount").value = p.heliCount;
-    setChk("incSPAA", p.incSPAA);
-    setChk("incHelis", p.incHelis);
+    // Unified SPAA/heli selects. Migrate old checkbox prefs:
+    //   incSPAA false → "0", true + no count → "auto"
+    //   incHelis false → "0", true → "auto"
+    if (p.spaaCount != null && $("spaaCount")) $("spaaCount").value = String(p.spaaCount);
+    else if (typeof p.incSPAA === "boolean" && $("spaaCount")) {
+      $("spaaCount").value = p.incSPAA ? "auto" : "0";
+    }
+    if (p.heliCount != null && $("heliCount")) $("heliCount").value = String(p.heliCount);
+    else if (typeof p.incHelis === "boolean" && $("heliCount")) {
+      $("heliCount").value = p.incHelis ? "auto" : "0";
+    }
     // Prefer the new dropdown value; migrate old level/dive checkbox prefs so a
     // returning user keeps their bomber-CAS choice.
     if (p.casType) $("casType").value = p.casType;
@@ -291,18 +294,18 @@
         // — show the effective rating so the user understands why a T-90M
         // (steel ~80mm) ranks above a Maus (steel ~232mm) for the Armor playstyle.
         const title = u.effArmor > Math.max(u.armorHull ?? 0, u.armorTurret ?? 0)
-          ? `Frontal armor (mm) · effective ${u.effArmor} incl. ERA/composite`
+          ? `Frontal armor (mm) · effective ${u.effArmor} incl. ERA/composite (spaded — unlockable packs counted)`
           : "Frontal armor (mm)";
         bits.push(stat(title, `${ico("i-shield")} ${armor.join(" / ")}`));
       }
       if (u.stabilized) bits.push(stat("Gun stabilizer — can shoot on the move", `${ico("i-bolt")} Stab`));
-      if (u.thermal) bits.push(stat("Thermal imaging", `${ico("i-scope")} Thermal`));
+      if (u.thermal) bits.push(stat("Thermal imaging (assumes researchable optic upgrades)", `${ico("i-scope")} Thermal`));
       else if (u.nv) bits.push(stat("Night vision", `${ico("i-scope")} NV`));
-      if (u.reloadTime != null) bits.push(stat("Stock reload time", `${ico("i-refresh")} ${u.reloadTime}s`));
+      if (u.reloadTime != null) bits.push(stat("Stock reload time (not spaded crew)", `${ico("i-refresh")} ${u.reloadTime}s`));
       if (u.crewCount != null) bits.push(stat("Crew count", `${ico("i-users")} ${u.crewCount}`));
       if (u.gunVel != null) {
         const penStr = u.gunPen != null ? ` · ${u.gunPen}mm pen` : "";
-        bits.push(stat(`Fastest AP shell muzzle velocity${u.gunCal ? ` · ${u.gunCal}mm bore` : ""}${penStr ? ` · ${u.gunPen}mm pen at 1km` : ""}`, `${ico("i-target")} ${u.gunVel} m/s${penStr}`));
+        bits.push(stat(`Best researchable AP shell (spaded)${u.gunCal ? ` · ${u.gunCal}mm bore` : ""}${penStr ? ` · ${u.gunPen}mm pen at 1km` : ""}`, `${ico("i-target")} ${u.gunVel} m/s${penStr}`));
       }
     } else if (slot.category === "spaa") {
       if (u.sam) bits.push(stat("Carries surface-to-air missiles", `${ico("i-missile")} SAM`));
@@ -323,13 +326,19 @@
     const meta = badgeFor(slot);
     const pool = result.pools[slot.category] || [];
     const alts = pool.filter(u => !result.used.has(u.id)).length; // others not in the lineup
+    // Spaded chip: tanks (armor/shells/optics) and air (best loadout). Central
+    // copy lives in LINEUP.SPADED so future data changes update one string.
+    const sp = LINEUP.SPADED || {};
+    const spadedChip = (slot.unit.type === "tank" || slot.unit.type === "aircraft" || slot.unit.type === "helicopter")
+      ? `<span class="spaded-chip" title="${esc(sp.title || "")}">${ico("i-info")} ${esc(sp.short || "Spaded")}</span>`
+      : "";
     return `
       <div class="slot-card" style="--cls-color:${meta.color}">
         <div class="slot-head">
           <span class="slot-num">SLOT ${String(i + 1).padStart(2, "0")}</span>
           <span class="cls-badge">${meta.label}</span>
         </div>
-        <div class="veh-name">${esc(slot.unit.name)} ${srcBadges(slot.unit)}</div>
+        <div class="veh-name">${esc(slot.unit.name)} ${srcBadges(slot.unit)} ${spadedChip}</div>
         <div class="veh-meta">${metaBits(slot, mode)}</div>
         <button class="swap-btn" data-slot="${i}" ${alts ? "" : "disabled"}
           title="Swap for the next-best ${meta.label.toLowerCase()} (respects your playstyle)">
@@ -377,9 +386,10 @@
       </div>
       ${healthPanel(result.health)}
       <div class="lineup-grid">${result.slots.map((s, i) => slotCard(s, i, o.mode, result)).join("")}</div>
+      <p class="pool-note spaded-note" title="${esc(LINEUP.SPADED?.title || "")}">${ico("i-info")} ${esc(LINEUP.SPADED?.note || "")}</p>
       <p class="pool-note">${result.poolSize} vehicles matched your filters in this bracket.
         Use <strong>Swap</strong> on any slot to cycle to the next-best pick of that role — handy for
-        swapping a premium you don't own for one you do. Hit Generate to reroll from scratch.</p>`;
+        swapping a premium you don't own for one you do. Hit Generate to rebuild from scratch.</p>`;
   }
 
   // Advance one slot to the next available candidate of its role, in ranked

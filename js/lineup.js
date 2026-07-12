@@ -9,6 +9,20 @@
 const LINEUP = (() => {
   const BR_WINDOW = 1.0; // vehicles from (target - 1.0) up to target
 
+  // Single source of truth for the "spaded vehicle" assumption. Shown on cards
+  // and in the results note. Keep this accurate when the offline builders gain
+  // new unlockable-dependent fields (ERA packs, top shells, thermals, etc.).
+  const SPADED = {
+    short: "Spaded",
+    title:
+      "Assumes a fully upgraded vehicle: best researchable AP shell, unlockable " +
+      "ERA/armor packs (e.g. T-80B Kontakt-1), thermal/NV upgrades, and other " +
+      "protection mods present in the game files. Stock reload is the exception.",
+    note:
+      "Vehicle stats assume a spaded (fully modified) tank or aircraft — best AP " +
+      "shell, researchable ERA/armor packs, and optic upgrades. Reload time is stock.",
+  };
+
   // Ground playstyles. `stat` returns a 0..1 bonus from the vehicle's real
   // stats (armor or mobility percentile within the current bracket).
   // `desc` is shown in the UI so players know what the scorer optimizes for.
@@ -17,29 +31,33 @@ const LINEUP = (() => {
       classW: { medium: 1.0, heavy: 0.85, td: 0.7, light: 0.65 },
       stat: (u, p) => 0.35 * p.armorPct(u) + 0.35 * p.mobPct(u) + 0.15 * p.crewPct(u) + 0.15 * p.penPct(u),
       variety: true, // mild class-mix damping is welcome here
-      desc: "Mixed classes near your BR. Armor + mobility + crew + gun pen, with mild variety so you don't get five mediums.",
+      desc: "Mixed classes near your BR. Armor + mobility + crew + gun pen, with mild variety so you don't get five mediums. Spaded stats.",
     },
     armor: {
       classW: { heavy: 1.0, medium: 0.8, td: 0.6, light: 0.15 },
       // Armor + reload: a fast-reloading tank brawls better. 70% effective
       // armor + 15% reload + 15% crew (more survivors in a brawl).
+      // effArmor includes researchable ERA packs when present in the model.
       stat: (u, p) => 0.7 * p.armorPct(u) + 0.15 * p.reloadPct(u) + 0.15 * p.crewPct(u),
       variety: false, // mono-class wall is the point
-      desc: "Heavy wall. Ranks by effective armor (ERA/composite), reload, and crew count. Class variety is off so heavies stay heavies.",
+      desc: "Heavy wall. Effective armor (incl. unlockable ERA/composite), reload & crew. Spaded. No class-mix damping.",
     },
     speed: {
       classW: { light: 1.0, medium: 0.85, td: 0.5, heavy: 0.1 },
-      // 65% hp/ton + 15% reverse + 10% turret + 10% max road speed proxy via mob.
       stat: (u, p) => 0.65 * p.mobPct(u) + 0.15 * p.revPct(u) + 0.1 * p.turretPct(u) + 0.1 * p.crewPct(u),
       variety: false,
-      desc: "Lights & flankers. Ranks by hp/ton, reverse speed, and turret traverse. Class variety is off so lights stay lights.",
+      desc: "Lights & flankers. hp/ton, reverse speed, turret traverse. Spaded mobility/optics. No class-mix damping.",
     },
     sniper: {
       classW: { td: 1.0, medium: 0.7, heavy: 0.5, light: 0.45 },
-      // Real gun data: penetration primary, velocity second, caliber third.
-      stat: (u, p) => 0.5 * p.penPct(u) + 0.3 * p.velPct(u) + 0.2 * p.calPct(u),
+      // Real gun data: pen primary. Missile/HEAT-only TDs with no AP shell get
+      // a hard floor so they can't win Sniper on class weight alone.
+      stat: (u, p) => {
+        if (u.gunPen == null || u.gunPen <= 0) return 0.04;
+        return 0.55 * p.penPct(u) + 0.3 * p.velPct(u) + 0.15 * p.calPct(u);
+      },
       variety: false,
-      desc: "Long-range punch. Ranks by gun penetration at 1 km, shell velocity, and bore caliber — tank destroyers preferred.",
+      desc: "Long-range KE punch. Best AP pen at 1 km (spaded shell), velocity & caliber. Missile-only TDs are heavily penalized.",
     },
   };
 
@@ -144,12 +162,13 @@ const LINEUP = (() => {
     };
 
     // Uptier fightability: can this gun pen the armor you'll meet at target+1.0?
-    // Sample effective armor of tanks (any nation) that live in [target, target+1]
-    // and score pen against that median. Pure in-bracket percentiles can't tell
-    // "best of a weak bracket" from "actually fights uptiers."
+    // Use the 75th percentile of medium/heavy/TD effective armor in
+    // [target, target+1] (any nation) so lights/IFVs don't drag the bar down.
+    // Pure in-bracket percentiles can't tell "best of a weak bracket" from
+    // "actually fights uptiers."
     const uptierArmor = [];
     for (const u of units) {
-      if (u.type !== "tank" || u.cls === "spaa") continue;
+      if (u.type !== "tank" || u.cls === "spaa" || u.cls === "light") continue;
       const br = u.br[o.mode];
       if (br == null || br < o.targetBR - 1e-9 || br > o.targetBR + 1.0 + 1e-9) continue;
       const a = armorValue(u);
@@ -157,13 +176,13 @@ const LINEUP = (() => {
     }
     uptierArmor.sort((a, b) => a - b);
     const needArmor = uptierArmor.length
-      ? uptierArmor[Math.floor(uptierArmor.length * 0.5)]
-      : (50 + o.targetBR * 40);
+      ? uptierArmor[Math.min(uptierArmor.length - 1, Math.floor(uptierArmor.length * 0.75))]
+      : (80 + o.targetBR * 45);
     const fightUptier = u => {
-      if (u.gunPen == null || u.gunPen <= 0) return 0.3;
-      // Soft saturating ratio: pen == need → 0.7, pen == 1.4×need → ~1.0.
+      if (u.gunPen == null || u.gunPen <= 0) return 0.15;
+      // pen == need → ~0.65; pen == 1.5×need → ~1.0.
       const ratio = u.gunPen / Math.max(needArmor, 1);
-      return Math.max(0, Math.min(1, ratio * 0.7));
+      return Math.max(0, Math.min(1, ratio * 0.65));
     };
 
     // Tech-tree preference: when scores are otherwise close, prefer vehicles
@@ -296,25 +315,31 @@ const LINEUP = (() => {
       }
     }
 
-    const autoSPAA = (o.incSPAA && spaas.length && o.slots >= 3)
+    // Unified support counts: "off"/"0" = none, "auto" = heuristic, "1"/"2" = fixed.
+    // (Replaces the old checkbox + separate count dual-control.)
+    const spaaMode = o.spaaCount == null || o.spaaCount === "" ? "auto" : String(o.spaaCount);
+    const heliMode = o.heliCount == null || o.heliCount === "" ? "auto" : String(o.heliCount);
+    const autoSPAA = (spaas.length && o.slots >= 3)
       ? ((o.slots >= 8 && spaas.length >= 2) ? 2 : 1)
       : 0;
-    // spaaCount overrides; "0" forces none even if the SPAA checkbox is on.
-    // Checkbox still acts as a master enable when count is auto.
     let spaaN = 0;
-    if (o.spaaCount != null && o.spaaCount !== "" && o.spaaCount !== "auto") {
-      spaaN = Math.min(parseCount(o.spaaCount, 0), spaas.length);
-    } else if (o.incSPAA) {
-      spaaN = autoSPAA;
+    if (spaaMode === "auto") spaaN = autoSPAA;
+    else if (spaaMode !== "off" && spaaMode !== "0") {
+      spaaN = Math.min(parseCount(spaaMode, 0), spaas.length);
     }
 
-    const autoHeli = (o.incHelis && helis.length && o.slots >= 5) ? 1 : 0;
+    const autoHeli = (helis.length && o.slots >= 5) ? 1 : 0;
     let heliN = 0;
-    if (o.heliCount != null && o.heliCount !== "" && o.heliCount !== "auto") {
-      heliN = Math.min(parseCount(o.heliCount, 0), helis.length);
-    } else if (o.incHelis) {
-      heliN = autoHeli;
+    if (heliMode === "auto") heliN = autoHeli;
+    else if (heliMode !== "off" && heliMode !== "0") {
+      heliN = Math.min(parseCount(heliMode, 0), helis.length);
     }
+
+    // Intent flags for the health panel (so "no SPAA" isn't a warning when chosen).
+    const wantSPAA = spaaMode !== "off" && spaaMode !== "0";
+    const wantHeli = heliMode !== "off" && heliMode !== "0";
+    const wantAir = !!(o.planeRole && o.planeRole !== "none" &&
+      !(o.airCount === "0" || o.airCount === 0));
 
     // Always reserve at least two slots (or all, for tiny lineups) for mains.
     const minGround = Math.min(2, o.slots);
@@ -393,20 +418,20 @@ const LINEUP = (() => {
       const kinds = [o.levelBombersCAS && "level", o.diveBombersCAS && "dive"].filter(Boolean).join(" or ");
       warnings.push(`No ${kinds} bombers in this BR bracket — using the best available attacker for CAS instead.`);
     }
-    if ((o.incSPAA || (o.spaaCount && o.spaaCount !== "auto" && o.spaaCount !== "0")) && !spaas.length) {
+    if (wantSPAA && !spaas.length) {
       warnings.push("No SPAA available in this BR bracket.");
     }
-    if (o.incSPAA && spaas.length && o.slots < 3 && (o.spaaCount === "auto" || o.spaaCount == null)) {
+    if (wantSPAA && spaas.length && o.slots < 3 && spaaMode === "auto") {
       warnings.push("SPAA skipped — needs at least 3 crew slots.");
     }
-    if ((o.incHelis || (o.heliCount && o.heliCount !== "auto" && o.heliCount !== "0")) && !helis.length) {
+    if (wantHeli && !helis.length) {
       warnings.push("No helicopters available in this BR bracket.");
     }
-    if (o.incHelis && helis.length && o.slots < 5 && (o.heliCount === "auto" || o.heliCount == null)) {
+    if (wantHeli && helis.length && o.slots < 5 && heliMode === "auto") {
       warnings.push("Helicopter skipped — needs at least 5 crew slots.");
     }
 
-    const health = assess(slots, o);
+    const health = assess(slots, { ...o, wantSPAA, wantHeli, wantAir });
 
     return { slots, pools, used, poolSize: pool.length, warnings, health };
   }
@@ -414,6 +439,16 @@ const LINEUP = (() => {
   // Fact-based sufficiency check. Everything here follows from War Thunder's
   // matchmaker rules and the actual BRs of the vehicles that got picked.
   function assess(slots, o) {
+    // Derive intent from options so post-swap reassess still knows when empty
+    // support was deliberate (generate also passes explicit want* flags).
+    const spaaMode = o.spaaCount == null || o.spaaCount === "" ? "auto" : String(o.spaaCount);
+    const wantSPAA = o.wantSPAA !== undefined
+      ? o.wantSPAA
+      : (spaaMode !== "off" && spaaMode !== "0");
+    const wantAir = o.wantAir !== undefined
+      ? o.wantAir
+      : !!(o.planeRole && o.planeRole !== "none" && o.airCount !== "0" && o.airCount !== 0);
+
     const mode = o.mode;
     const brs = slots.map(s => s.unit.br[mode]).filter(b => b != null);
     if (!brs.length) return null;
@@ -462,21 +497,33 @@ const LINEUP = (() => {
       });
     }
 
-    const spaaUnit = slots.find(s => s.category === "spaa")?.unit;
-    if (spaaUnit?.sam) {
+    // Inspect ALL SPAA slots (not just the first) so a gun SPAA + SAM lineup
+    // is credited for the SAM.
+    const spaaUnits = slots.filter(s => s.category === "spaa").map(s => s.unit);
+    const anySam = spaaUnits.some(u => u.sam);
+    const anyRadar = spaaUnits.some(u => u.radar);
+    if (anySam) {
       notes.push({ level: "good", text: "SAM SPAA included — guided missiles answer enemy CAS and helicopters at long range." });
-    } else if (spaaUnit?.radar) {
+    } else if (anyRadar) {
       notes.push({ level: "good", text: "Radar SPAA included — it can track and engage aircraft at range." });
     } else if (hasSPAA) {
       notes.push({ level: "good", text: "SPAA included — you can answer enemy CAS (gun-based, best at shorter range)." });
+    } else if (!wantSPAA) {
+      notes.push({ level: "info", text: "No SPAA (as requested) — you'll rely on allies or your own air for anti-air." });
     } else {
       notes.push({ level: "warn", text: "No SPAA — you'll be exposed to enemy aircraft with no dedicated answer." });
     }
 
-    if (!hasAir) notes.push({ level: "info", text: "No aircraft — no way to contribute from the air or counter enemy planes offensively." });
+    if (!hasAir) {
+      if (!wantAir) {
+        notes.push({ level: "info", text: "No aircraft (as requested)." });
+      } else {
+        notes.push({ level: "info", text: "No aircraft — no way to contribute from the air or counter enemy planes offensively." });
+      }
+    }
 
     return { topBR, avgBR, targetBR: o.targetBR, core, ballast, total: coreTotal, hasSPAA, hasAir, verdict, notes };
   }
 
-  return { generate, assess, BR_WINDOW, PLAYSTYLES };
+  return { generate, assess, BR_WINDOW, PLAYSTYLES, SPADED };
 })();

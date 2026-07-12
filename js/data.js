@@ -49,7 +49,7 @@ const WT_DATA = (() => {
     "hpPerTon gunVel gunCal gunPen turnTime maxSpeed climbRate " +
     "crewCount reloadTime turretSpeed " +
     "ordnanceKg atgm atgmRange sam radar aaCal " +
-    "fmt:name-markers-stripped";
+    "fmt:name-markers-stripped;air:same-preset-firepower";
   function hash32(s) {
     let h = 2166136261;
     for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
@@ -94,31 +94,38 @@ const WT_DATA = (() => {
 
   // Ground-attack firepower for a plane or helicopter. wpcost pre-aggregates
   // each weapon preset's ordnance, so we can weigh real tonnage and guided
-  // munitions — the things the old raw bomb-count ignored — without opening any
-  // weapon file:
+  // munitions without opening any weapon file:
   //   totalBombRocketMass / totalNapalmBombMass / totalTorpedoMass — unguided kg
   //   totalGuidedBombMass  — precision bombs (counted double: they hit)
   //   atgmVisibilityType    — the preset carries anti-ground guided missiles
-  //   atgmMaxDistance       — ATGM standoff range (m), a heli-vs-heli tiebreak
-  // Returns the heaviest preset's real ground-ordnance mass (guided bombs count
-  // double — they actually hit) plus whether the plane can bring ATGMs and at
-  // what range. The scorer blends these; kept separate here so the UI can show
-  // an honest kg figure instead of a padded score.
+  //   atgmMaxDistance       — ATGM standoff range (m)
+  //
+  // Honest same-preset pick: ordnance kg and ATGM come from ONE loadout, not
+  // "heaviest bombs from preset A + ATGMs from preset B". The chosen preset is
+  // the one with the best combat score (kg + ATGM bonus), matching how the
+  // lineup scorer values firepower.
   function airFirepower(w) {
-    let ordnanceKg = 0, hasATGM = false, atgmRange = 0;
+    let best = { ordnanceKg: 0, atgm: false, atgmRange: 0, score: -1 };
     for (const preset of Object.values(w.weapons || {})) {
       const kg =
         num(preset.totalBombRocketMass) +
         num(preset.totalNapalmBombMass) +
         num(preset.totalTorpedoMass) * 0.5 +
         num(preset.totalGuidedBombMass) * 2;
-      if (kg > ordnanceKg) ordnanceKg = kg;
-      if ("atgmVisibilityType" in preset) {
-        hasATGM = true;
-        atgmRange = Math.max(atgmRange, num(preset.atgmMaxDistance));
+      const hasATGM = "atgmVisibilityType" in preset;
+      const range = hasATGM ? num(preset.atgmMaxDistance) : 0;
+      // Same blend the scorer uses: guided tank-killers punch far above mass.
+      const score = kg + (hasATGM ? 2500 + Math.min(range, 8000) * 0.05 : 0);
+      if (score > best.score) {
+        best = {
+          ordnanceKg: Math.round(kg),
+          atgm: hasATGM,
+          atgmRange: Math.round(range),
+          score,
+        };
       }
     }
-    return { ordnanceKg: Math.round(ordnanceKg), atgm: hasATGM, atgmRange: Math.round(atgmRange) };
+    return { ordnanceKg: best.ordnanceKg, atgm: best.atgm, atgmRange: best.atgmRange };
   }
 
   function classify(type, tags) {

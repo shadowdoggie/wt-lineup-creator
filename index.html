@@ -121,33 +121,31 @@
       <div class="form-section">
         <h3 class="section-title">Include in lineup</h3>
         <div class="field">
-          <div class="checks-grid">
-            <label class="check"><input type="checkbox" id="incSPAA" checked><span class="check-label">SPAA</span></label>
-            <label class="check"><input type="checkbox" id="incHelis"><span class="check-label">Helicopters</span></label>
+          <div class="field-row support-counts">
+            <div class="field">
+              <label for="spaaCount">SPAA</label>
+              <select id="spaaCount" title="How many SPAA slots to reserve">
+                <option value="auto" selected>Auto — 1 (2 at 8+ slots)</option>
+                <option value="0">Off — none</option>
+                <option value="1">1 SPAA</option>
+                <option value="2">2 SPAA</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="heliCount">Helicopters</label>
+              <select id="heliCount" title="How many helicopter slots to reserve">
+                <option value="0" selected>Off — none</option>
+                <option value="auto">Auto — 1 when slots allow</option>
+                <option value="1">1 helicopter</option>
+              </select>
+            </div>
+          </div>
+          <div class="checks-grid" style="margin-top:10px">
             <label class="check"><input type="checkbox" id="incPremium"><span class="check-label">Premium</span></label>
             <label class="check"><input type="checkbox" id="incSquadron"><span class="check-label">Squadron</span></label>
             <label class="check"><input type="checkbox" id="incGift"><span class="check-label">Event / gift</span></label>
           </div>
-          <div class="field-row support-counts">
-            <div class="field">
-              <label for="spaaCount">SPAA count</label>
-              <select id="spaaCount" title="Override how many SPAA slots to fill">
-                <option value="auto" selected>Auto</option>
-                <option value="0">0</option>
-                <option value="1">1</option>
-                <option value="2">2</option>
-              </select>
-            </div>
-            <div class="field">
-              <label for="heliCount">Heli count</label>
-              <select id="heliCount" title="Override how many helicopter slots to fill">
-                <option value="auto" selected>Auto</option>
-                <option value="0">0</option>
-                <option value="1">1</option>
-              </select>
-            </div>
-          </div>
-          <p class="hint field-hint-bottom">Tech tree vehicles are always included. Premiums with event flags still appear when Premium is on.</p>
+          <p class="hint field-hint-bottom">Tech tree vehicles are always included. Premiums with event flags still appear when Premium is on. Stats assume spaded vehicles.</p>
         </div>
       </div>
 
@@ -158,25 +156,25 @@
             <input type="radio" name="playstyle" value="balanced" checked>
             <svg class="ico ps-icon"><use href="#i-scales"/></svg>
             <span class="ps-name">Balanced</span>
-            <span class="ps-desc">Mixed classes near your BR — armor + mobility + gun, mild variety so you don't get five mediums.</span>
+            <span class="ps-desc">Mixed classes near your BR — armor + mobility + gun. Spaded stats. Mild variety.</span>
           </label>
           <label class="ps-card">
             <input type="radio" name="playstyle" value="armor">
             <svg class="ico ps-icon"><use href="#i-shield"/></svg>
             <span class="ps-name">Armor</span>
-            <span class="ps-desc">Heavy wall. Effective armor (ERA/composite), reload &amp; crew. No class-mix damping.</span>
+            <span class="ps-desc">Heavy wall. Effective armor incl. unlockable ERA. Spaded. No class-mix damping.</span>
           </label>
           <label class="ps-card">
             <input type="radio" name="playstyle" value="speed">
             <svg class="ico ps-icon"><use href="#i-bolt"/></svg>
             <span class="ps-name">Speed</span>
-            <span class="ps-desc">Lights &amp; flankers. hp/ton, reverse speed, turret traverse. No class-mix damping.</span>
+            <span class="ps-desc">Lights &amp; flankers. hp/ton, reverse, turret. Spaded. No class-mix damping.</span>
           </label>
           <label class="ps-card">
             <input type="radio" name="playstyle" value="sniper">
             <svg class="ico ps-icon"><use href="#i-scope"/></svg>
             <span class="ps-name">Sniper</span>
-            <span class="ps-desc">Long-range punch. Gun pen at 1 km, velocity &amp; caliber — TDs preferred.</span>
+            <span class="ps-desc">Best AP pen (spaded shell) at 1 km. Missile-only TDs heavily penalized.</span>
           </label>
         </div>
       </div>
