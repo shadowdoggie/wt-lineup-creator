@@ -13,7 +13,11 @@ A War Thunder lineup generator that pulls **live battle ratings and vehicle data
   - Tech-tree only, or including premium / squadron / event vehicles
 - **Real stats** — playstyle scoring uses actual hull/turret armor thickness and vehicle class tags from the game files.
 
-## Running it
+## Live
+
+Deployed at **https://wt.shadowdog.cat** (VPS + Caddy, static files in `/var/www/wt`). Redeploy with `./deploy.sh`.
+
+## Running it locally
 
 It's a fully static web app — no build step, no backend. Serve the folder with any static file server, e.g.:
 
