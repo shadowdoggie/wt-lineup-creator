@@ -280,9 +280,19 @@
   }
 
   // ATGM badge for a CAS jet or attack heli, with standoff range when known.
+  // atgmQuality (0..1) reflects guidance type: fire-and-forget optic/MITL
+  // (Maverick, GROM, Kosava) is the CAS gold standard; manual-command MCLOS
+  // (Kh-23) is far weaker. Show the guidance class so the player can tell at a
+  // glance why a jet ranks where it does.
+  const ATGM_LABELS = [
+    { min: 0.8, label: "ATGM FF", title: "Fire-and-forget guided missiles (TV/optical or MITL)" },
+    { min: 0.5, label: "ATGM IR", title: "IR-homing guided missiles (fire-and-forget)" },
+    { min: 0.01, label: "ATGM MCLOS", title: "Manual-command guided missiles (short standoff, pilot steers)" },
+  ];
   function atgmBadge(u) {
     const km = u.atgmRange ? ` ~${(u.atgmRange / 1000).toFixed(u.atgmRange < 10000 ? 1 : 0)}km` : "";
-    return `<span class="stat" title="Carries anti-ground guided missiles${km ? " · standoff range" : ""}">${ico("i-missile")} ATGM${km}</span>`;
+    const tier = ATGM_LABELS.find(t => u.atgmQuality >= t.min) || { label: "ATGM", title: "Anti-ground guided missiles" };
+    return `<span class="stat" title="${tier.title}${km ? " · standoff range" : ""}">${ico("i-missile")} ${tier.label}${km}</span>`;
   }
 
   // Role-relevant stat line: hp/ton + armor + gun for ground, radar/SAM/caliber
@@ -332,7 +342,7 @@
       if (u.cm) bits.push(stat("Countermeasures (flares/chaff)", `${ico("i-radar")} CM`));
     } else if (slot.category === "attacker" || slot.category === "heli") {
       if (u.atgm) bits.push(atgmBadge(u));
-      if (u.ordnanceKg > 0) bits.push(stat("Best same-preset bomb + rocket ordnance (guided bombs weighted double)", `${ico("i-bomb")} ${u.ordnanceKg.toLocaleString()} kg`));
+      if (u.ordnanceKg > 0) bits.push(stat("Best bomb + rocket ordnance across any preset (guided bombs weighted double)", `${ico("i-bomb")} ${u.ordnanceKg.toLocaleString()} kg`));
       if (u.climbRate != null && slot.category === "attacker") bits.push(stat("Rate of climb", `${ico("i-bolt")} ${u.climbRate} m/s`));
       if (!u.atgm && u.ordnanceKg === 0) bits.push(stat("", "Guns only"));
     }

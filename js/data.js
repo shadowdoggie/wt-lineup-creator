@@ -48,7 +48,7 @@ const WT_DATA = (() => {
     "researchPoints armorHull armorTurret armorEff hasEra hasComposite stabilized thermal nv revRatio " +
     "hpPerTon gunVel gunCal gunPen gunPenSrc autoLoader turnTime maxSpeed climbRate " +
     "crewCount reloadTime turretSpeed " +
-    "ordnanceKg atgm atgmRange aam arh cm sam radar aaCal " +
+    "ordnanceKg atgm atgmQuality atgmRange aam arh cm sam radar aaCal " +
     "fmt:hybrid-pen-table|est;armor:steel+flags+eff;reload:al-flag;air:aam";
   function hash32(s) {
     let h = 2166136261;
@@ -97,35 +97,66 @@ const WT_DATA = (() => {
   // munitions without opening any weapon file:
   //   totalBombRocketMass / totalNapalmBombMass / totalTorpedoMass — unguided kg
   //   totalGuidedBombMass  — precision bombs (counted double: they hit)
-  //   atgmVisibilityType    — the preset carries anti-ground guided missiles
-  //   atgmMaxDistance       — ATGM standoff range (m)
+  //   atgmVisibilityType    — guidance type of the preset's anti-ground missiles
+  //   atgmMaxDistance       — ATGM standoff range (m) — helicopters only
   //
-  // Honest same-preset pick: ordnance kg and ATGM come from ONE loadout, not
-  // "heaviest bombs from preset A + ATGMs from preset B". The chosen preset is
-  // the one with the best combat score (kg + ATGM bonus), matching how the
-  // lineup scorer values firepower.
+  // ordnanceKg and ATGM are tracked INDEPENDENTLY across presets: a plane that
+  // can carry heavy bombs on preset A OR Mavericks on preset B has both
+  // capabilities — the player picks the loadout for the mission. Coupling them
+  // to one "best" preset hid a dedicated attacker's guided arsenal (its bomb
+  // load outscored its missile load) while flagging a fighter's token MCLOS
+  // missile as a real ATGM carrier.
+  //
+  // atgmVisibilityType encodes real anti-tank missile quality:
+  //   arm / armWideRange — anti-RADIATION (targets radar emissions, NOT tanks)
+  //   default            — manual command / MCLOS (Kh-23 etc.) — short range,
+  //                        pilot must steer the missile by hand
+  //   infraRed           — IR-homing fire-and-forget
+  //   optic              — TV/optical fire-and-forget (Maverick, GROM) — the CAS
+  //                        gold standard: lock, drop, leave
+  //   opticWithMITL      — man-in-the-loop optical (Kosava) — fire-and-forget
+  //   infraRedWithMITL   — man-in-the-loop IR — fire-and-forget
+  // ARMs are excluded from the ATGM flag entirely (they can't kill a tank).
+  const ATGM_QUALITY = {
+    default: 0.3,             // MCLOS — pilot steers manually, short standoff
+    infrared: 0.6,            // IR-homing fire-and-forget
+    optic: 0.8,               // TV/optical fire-and-forget — Maverick-class
+    opticwithmitl: 1.0,       // MITL optical — fire-and-forget precision
+    infraredwithmitl: 1.0,    // MITL IR — fire-and-forget precision
+  };
+  function atgmTypeQuality(rawType) {
+    // atgmVisibilityType can be a single string or an array (a preset carrying
+    // mixed missile types). Take the best type's quality.
+    const types = Array.isArray(rawType) ? rawType : [rawType];
+    let best = 0;
+    for (const t of types) {
+      const q = ATGM_QUALITY[String(t).toLowerCase()];
+      if (q > best) best = q;
+    }
+    return best;
+  }
   function airFirepower(w) {
-    let best = { ordnanceKg: 0, atgm: false, atgmRange: 0, score: -1 };
+    let maxKg = 0, bestQuality = 0, maxRange = 0;
     for (const preset of Object.values(w.weapons || {})) {
       const kg =
         num(preset.totalBombRocketMass) +
         num(preset.totalNapalmBombMass) +
         num(preset.totalTorpedoMass) * 0.5 +
         num(preset.totalGuidedBombMass) * 2;
-      const hasATGM = "atgmVisibilityType" in preset;
-      const range = hasATGM ? num(preset.atgmMaxDistance) : 0;
-      // Same blend the scorer uses: guided tank-killers punch far above mass.
-      const score = kg + (hasATGM ? 2500 + Math.min(range, 8000) * 0.05 : 0);
-      if (score > best.score) {
-        best = {
-          ordnanceKg: Math.round(kg),
-          atgm: hasATGM,
-          atgmRange: Math.round(range),
-          score,
-        };
+      if (kg > maxKg) maxKg = kg;
+      if ("atgmVisibilityType" in preset) {
+        const q = atgmTypeQuality(preset.atgmVisibilityType);
+        if (q > bestQuality) bestQuality = q;
+        const range = num(preset.atgmMaxDistance);
+        if (range > maxRange) maxRange = range;
       }
     }
-    return { ordnanceKg: best.ordnanceKg, atgm: best.atgm, atgmRange: best.atgmRange };
+    return {
+      ordnanceKg: Math.round(maxKg),
+      atgm: bestQuality > 0,
+      atgmQuality: bestQuality,
+      atgmRange: Math.round(maxRange),
+    };
   }
 
   // Air-to-air / survivability flags from the same weapon presets (fighters):
@@ -290,6 +321,7 @@ const WT_DATA = (() => {
         climbRate: air && typeof shop.climbSpeed === "number" ? shop.climbSpeed : null,
         ordnanceKg: fire ? fire.ordnanceKg : 0,
         atgm: fire ? fire.atgm : false,
+        atgmQuality: fire ? fire.atgmQuality : 0,
         atgmRange: fire ? fire.atgmRange : 0,
         aam: combat ? combat.aam : false,   // any air-to-air missiles
         arh: combat ? combat.arh : false,   // active-radar / BVR-class AAMs

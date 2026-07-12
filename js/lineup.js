@@ -219,9 +219,9 @@ const LINEUP = (() => {
       (u.thermal ? 0.12 : u.nv ? 0.05 : 0) +
       ownershipNudge(u);
 
-    // Ground-attack firepower = real ordnance weight with a big premium for
-    // ATGMs (guided tank-killers punch far above their mass).
-    const firepower = u => u.ordnanceKg + (u.atgm ? 2500 : 0);
+    // Ground-attack firepower = real ordnance weight with a premium for ATGMs
+    // scaled by guidance quality (fire-and-forget optic >> manual-command Kh-23).
+    const firepower = u => u.ordnanceKg + u.atgmQuality * 2500;
 
     const fightersOnly = planes.filter(u => u.cls === "fighter");
     const turnPctRaw = percentiler(planes, u => u.turnTime);
@@ -259,13 +259,13 @@ const LINEUP = (() => {
         (speedPctRaw(u) ?? 0.4) * 0.3 +
         turnQuality(u) * 0.2 +
         (u.cls === "attacker" ? 0.55 : 0) +
-        (u.atgm ? 0.4 : 0) +
+        (u.atgmQuality * 0.55) +
         (u.cm ? 0.1 : 0) +
         ownershipNudge(u) -
         (!o.levelBombersCAS && isBomber ? 1.0 : 0);
     };
-    // Max theoretical ≈ 1.2+1.0+0.35+0.3+0.2+0.55+0.4+0.1+0.55 ≈ 4.65
-    const ATTACKER_NORM = 4.65;
+    // Max theoretical ≈ 1.2+1.0+0.35+0.3+0.2+0.55+0.55+0.1+0.55 ≈ 4.8
+    const ATTACKER_NORM = 4.8;
     const attackerScore = u => attackerRaw(u) / ATTACKER_NORM;
 
     // Helicopters: BR closeness + ATGM standoff range dominate. Ordnance kg used
@@ -274,7 +274,7 @@ const LINEUP = (() => {
     const heliPayRaw = percentiler(helis, firepower);
     const heliScore = u =>
       brScore(u.br[o.mode], o.targetBR) * 1.8 +
-      (u.atgm ? 0.6 + Math.min((u.atgmRange || 0) / 8000, 0.75) : 0) +
+      (u.atgmQuality * (0.6 + Math.min((u.atgmRange || 0) / 8000, 0.75))) +
       (heliPayRaw(u) ?? 0) * 0.5 +
       ownershipNudge(u);
 
