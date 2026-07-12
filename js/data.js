@@ -6,13 +6,16 @@
  * condenses it into a compact unit list cached in localStorage.
  */
 const WT_DATA = (() => {
-  const BASE = "https://raw.githubusercontent.com/gszabi99/War-Thunder-Datamine/master/";
-  const SOURCES = {
-    wpcost:   BASE + "char.vromfs.bin_u/config/wpcost.blkx",
-    unittags: BASE + "char.vromfs.bin_u/config/unittags.blkx",
-    names:    BASE + "lang.vromfs.bin_u/lang/units.csv",
+  const REPO = "gszabi99/War-Thunder-Datamine";
+  const COMMIT_API = `https://api.github.com/repos/${REPO}/commits/master`;
+  const PATHS = {
+    wpcost:   "char.vromfs.bin_u/config/wpcost.blkx",
+    unittags: "char.vromfs.bin_u/config/unittags.blkx",
+    names:    "lang.vromfs.bin_u/lang/units.csv",
   };
   const CACHE_KEY = "wtlc_data_v1";
+  // Fallback re-download interval, used only when the commit check fails
+  // (offline, or GitHub API rate limit of 60 req/h per IP exhausted).
   const MAX_AGE_MS = 24 * 3600 * 1000;
 
   const NATIONS = [
@@ -146,37 +149,61 @@ const WT_DATA = (() => {
     }
   }
 
-  async function fetchSource(key, onStep) {
-    const res = await fetch(SOURCES[key]);
+  async function fetchSource(key, ref, onStep) {
+    const res = await fetch(`https://raw.githubusercontent.com/${REPO}/${ref}/${PATHS[key]}`);
     if (!res.ok) throw new Error(`Failed to download ${key} (HTTP ${res.status})`);
     const body = key === "names" ? await res.text() : await res.json();
     onStep?.(key);
     return body;
   }
 
+  // Latest datamine commit = current version of the game files. The mirror
+  // updates within hours of every patch/BR change, so comparing this against
+  // the cached commit tells us whether Gaijin changed anything.
+  async function fetchCommitInfo() {
+    const res = await fetch(COMMIT_API, { headers: { Accept: "application/vnd.github+json" } });
+    if (!res.ok) throw new Error(`GitHub API HTTP ${res.status}`);
+    const c = await res.json();
+    return { sha: c.sha, date: c.commit?.committer?.date || null };
+  }
+
   /**
-   * Loads unit data. Uses the local cache when it is fresh enough, otherwise
-   * downloads from the datamine mirror. `onStep(key)` fires per finished file.
+   * Loads unit data. Re-downloads whenever the datamine mirror has a new
+   * commit (i.e. the game files changed); otherwise serves the local cache.
+   * `onStep(key)` fires per finished file.
    */
   async function load({ force = false, onStep } = {}) {
-    if (!force) {
-      const cache = readCache();
-      if (cache && Date.now() - cache.fetchedAt < MAX_AGE_MS) {
-        return { ...cache, fromCache: true };
-      }
-    }
+    const cache = readCache();
+    let head = null;
     try {
+      head = await fetchCommitInfo();
+    } catch {
+      // Commit check unavailable — fall back to time-based caching below.
+    }
+
+    if (cache && !force) {
+      if (head && cache.sha === head.sha) return { ...cache, fromCache: true, upToDate: true };
+      if (!head && Date.now() - cache.fetchedAt < MAX_AGE_MS) return { ...cache, fromCache: true };
+    }
+
+    try {
+      // Pin all three downloads to one commit so they can't mix versions.
+      const ref = head ? head.sha : "master";
       const [wpcost, unittags, namesCsv] = await Promise.all([
-        fetchSource("wpcost", onStep),
-        fetchSource("unittags", onStep),
-        fetchSource("names", onStep),
+        fetchSource("wpcost", ref, onStep),
+        fetchSource("unittags", ref, onStep),
+        fetchSource("names", ref, onStep),
       ]);
-      const cache = { fetchedAt: Date.now(), units: buildUnits(wpcost, unittags, parseNames(namesCsv)) };
-      writeCache(cache);
-      return { ...cache, fromCache: false };
+      const fresh = {
+        fetchedAt: Date.now(),
+        sha: head?.sha || null,
+        gameDataDate: head?.date || null,
+        units: buildUnits(wpcost, unittags, parseNames(namesCsv)),
+      };
+      writeCache(fresh);
+      return { ...fresh, fromCache: false, upToDate: !!head };
     } catch (err) {
       // Offline / rate-limited: fall back to stale cache rather than a dead app.
-      const cache = readCache();
       if (cache) return { ...cache, fromCache: true, stale: true };
       throw err;
     }

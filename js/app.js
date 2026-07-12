@@ -47,11 +47,17 @@
   }
 
   function renderDataStatus(res) {
-    const age = Date.now() - res.fetchedAt;
-    const hours = Math.round(age / 3600000);
-    const when = hours < 1 ? "just now" : hours < 24 ? `${hours} h ago` : new Date(res.fetchedAt).toLocaleDateString();
-    $("dataStatusText").innerHTML =
-      `${state.units.length.toLocaleString()} vehicles · data fetched <span class="${res.stale ? "" : "fresh"}">${when}</span>${res.stale ? " (offline — using old cache)" : ""}`;
+    const n = state.units.length.toLocaleString();
+    let status;
+    if (res.stale) {
+      status = `cached ${new Date(res.fetchedAt).toLocaleDateString()} (couldn't reach the mirror)`;
+    } else if (res.upToDate) {
+      const d = res.gameDataDate ? new Date(res.gameDataDate).toLocaleDateString() : null;
+      status = `<span class="fresh">✔ up to date with the game files</span>${d ? ` (last change ${d})` : ""}`;
+    } else {
+      status = `fetched ${new Date(res.fetchedAt).toLocaleDateString()}`;
+    }
+    $("dataStatusText").innerHTML = `${n} vehicles · ${status}`;
   }
 
   /* ---------- form behavior ---------- */
