@@ -12,6 +12,7 @@ const WT_DATA = (() => {
     wpcost:   "char.vromfs.bin_u/config/wpcost.blkx",
     unittags: "char.vromfs.bin_u/config/unittags.blkx",
     names:    "lang.vromfs.bin_u/lang/units.csv",
+    shop:     "char.vromfs.bin_u/config/shop.blkx",
   };
   // Where the raw datamine files come from, tried in order. jsDelivr mirrors the
   // same GitHub repo over a CDN, so it's a genuine fallback when raw.github is
@@ -41,7 +42,9 @@ const WT_DATA = (() => {
   // any change to the unit shape automatically invalidates stale caches — no
   // more remembering to bump a manual "_v2". Add new fields to this string.
   const SCHEMA = "id name country type cls diveBomber rank br premium squadron gift " +
-    "researchPoints armorHull armorTurret effArmor hpPerTon gunVel gunCal turnTime " +
+    "researchPoints armorHull armorTurret effArmor stabilized thermal nv revRatio " +
+    "hpPerTon gunVel gunCal gunPen turnTime maxSpeed climbRate " +
+    "crewCount reloadTime turretSpeed " +
     "ordnanceKg atgm atgmRange sam radar aaCal";
   function hash32(s) {
     let h = 2166136261;
@@ -152,7 +155,25 @@ const WT_DATA = (() => {
     return names;
   }
 
-  function buildUnits(wpcost, unittags, names) {
+  // shop.blkx lists every vehicle actually in the game's tech tree / shop.
+  // Gaijin keeps removed/test/tutorial vehicles in wpcost (e.g. us_amx_13_75,
+  // a French tank that was briefly in the USA tree but is no longer obtainable)
+  // — without this cross-reference the app would show them in lineups.
+  function collectShopIds(shop) {
+    const ids = new Set();
+    const walk = obj => {
+      if (!obj || typeof obj !== "object") return;
+      if (Array.isArray(obj)) { obj.forEach(walk); return; }
+      for (const [k, v] of Object.entries(obj)) {
+        if (v && typeof v === "object" && "rank" in v) ids.add(k);
+        walk(v);
+      }
+    };
+    walk(shop);
+    return ids;
+  }
+
+  function buildUnits(wpcost, unittags, names, shopIds) {
     const units = [];
     for (const [id, w] of Object.entries(wpcost)) {
       if (!w || typeof w !== "object") continue;
@@ -162,6 +183,7 @@ const WT_DATA = (() => {
       if (type !== "tank" && type !== "aircraft" && type !== "helicopter") continue;
       const tags = t.tags || {};
       if (tags.hideBrForVehicle) continue; // AI / event-only oddities
+      if (shopIds && !shopIds.has(id)) continue; // not in the shop = not obtainable
       const country = (w.country || "").replace("country_", "");
       if (!NATION_IDS.has(country)) continue;
       const cls = classify(type, tags);
@@ -198,15 +220,25 @@ const WT_DATA = (() => {
         armorHull: Array.isArray(shop.armorThicknessHull) ? shop.armorThicknessHull[0] : null,
         armorTurret: Array.isArray(shop.armorThicknessTurret) ? shop.armorThicknessTurret[0] : null,
         effArmor: 0, // filled from armor.json after load — KE-effective rating
+        stabilized: false, // filled from armor.json — gun stabilizer present
+        thermal: false, // filled from armor.json — thermal imaging
+        nv: false, // filled from armor.json — any night vision
+        revRatio: 0, // filled from armor.json — reverse speed / forward speed
         hpPerTon: null, // filled from mobility.json after load
         gunVel: null,   // filled from gunstats.json after load (best AP shell m/s)
         gunCal: null,   // bore caliber (mm)
+        gunPen: null,   // estimated penetration at 1000m (mm)
         sam: false,     // SPAA-only, filled from spaa.json: carries surface-to-air missiles
         radar: false,   // SPAA-only: has a tracking radar
         aaCal: null,    // SPAA-only: main gun caliber (mm)
+        crewCount: typeof w.crewTotalCount === "number" ? w.crewTotalCount : null,
+        reloadTime: typeof w.reloadTime_cannon === "number" ? w.reloadTime_cannon : null,
+        turretSpeed: Array.isArray(w.turretSpeed) ? w.turretSpeed[0] : null,
         // Fighters: lower turnTime = better dogfighter. Air/heli: real
         // ground-ordnance weight (kg) + whether it can bring ATGMs.
         turnTime: air && typeof shop.turnTime === "number" ? shop.turnTime : null,
+        maxSpeed: air && typeof shop.maxSpeed === "number" ? shop.maxSpeed : null,
+        climbRate: air && typeof shop.climbSpeed === "number" ? shop.climbSpeed : null,
         ordnanceKg: fire ? fire.ordnanceKg : 0,
         atgm: fire ? fire.atgm : false,
         atgmRange: fire ? fire.atgmRange : 0,
@@ -316,7 +348,7 @@ const WT_DATA = (() => {
     // No gun file: Sniper falls back to its class-based proxy.
     if (guns) for (const u of tanks) {
       const g = guns[u.id];
-      if (g) { u.gunVel = g.v ?? null; u.gunCal = g.c ?? null; }
+      if (g) { u.gunVel = g.v ?? null; u.gunCal = g.c ?? null; u.gunPen = g.p ?? null; }
     }
     // No SPAA file: anti-air scoring falls back to BR closeness only.
     if (spaa) for (const u of tanks) {
@@ -325,15 +357,17 @@ const WT_DATA = (() => {
     }
     // Effective armor: hull/turret steel (from DamageParts, more complete than
     // the Shop values) + an eff rating folding in composite/ERA/spall-liners.
-    // Falls back to the Shop values when armor.json has 0 for that field, so a
-    // tank with a shop-displayed thickness but no DamageParts plate isn't
-    // blanked. No armor file: Armor playstyle falls back to raw Shop steel only.
+    // Also carries stabilization, thermals/NV, and reverse-speed ratio.
     if (armor) for (const u of tanks) {
       const a = armor[u.id];
       if (!a) continue;
       if (a.h > 0) u.armorHull = a.h;
       if (a.t > 0) u.armorTurret = a.t;
       u.effArmor = a.eff || 0;
+      u.stabilized = !!a.stab;
+      u.thermal = !!a.thermal;
+      u.nv = !!a.nv;
+      u.revRatio = a.rev || 0;
     }
     return {
       mobility: mob ? Object.keys(mob).length : null,
@@ -384,18 +418,19 @@ const WT_DATA = (() => {
     }
 
     try {
-      // Pin all three downloads to one commit so they can't mix versions.
+      // Pin all downloads to one commit so they can't mix versions.
       const ref = head ? head.sha : "master";
-      const [wpcost, unittags, namesCsv] = await Promise.all([
+      const [wpcost, unittags, namesCsv, shop] = await Promise.all([
         fetchSource("wpcost", ref, onStep),
         fetchSource("unittags", ref, onStep),
         fetchSource("names", ref, onStep),
+        fetchSource("shop", ref, onStep),
       ]);
       const fresh = {
         fetchedAt: Date.now(),
         sha: head?.sha || null,
         gameDataDate: head?.date || null,
-        units: buildUnits(wpcost, unittags, parseNames(namesCsv)),
+        units: buildUnits(wpcost, unittags, parseNames(namesCsv), collectShopIds(shop)),
       };
       writeCache(fresh);
       return finalize({ ...fresh, fromCache: false, upToDate: !!head });

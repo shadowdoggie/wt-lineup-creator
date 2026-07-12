@@ -243,7 +243,7 @@
   }
 
   // Role-relevant stat line: hp/ton + armor + gun for ground, radar/SAM/caliber
-  // for SPAA, turn time for fighters, ordnance + ATGMs for CAS and helis.
+  // for SPAA, turn time + climb for fighters, ordnance + ATGMs for CAS and helis.
   function metaBits(slot, mode) {
     const u = slot.unit;
     const stat = (title, inner) => `<span class="stat"${title ? ` title="${title}"` : ""}>${inner}</span>`;
@@ -264,13 +264,22 @@
           : "Frontal armor (mm)";
         bits.push(stat(title, `${ico("i-shield")} ${armor.join(" / ")}`));
       }
-      if (u.gunVel != null) bits.push(stat(`Fastest AP shell muzzle velocity${u.gunCal ? ` · ${u.gunCal}mm bore` : ""}`, `${ico("i-target")} ${u.gunVel} m/s`));
+      if (u.stabilized) bits.push(stat("Gun stabilizer — can shoot on the move", `${ico("i-bolt")} Stab`));
+      if (u.thermal) bits.push(stat("Thermal imaging", `${ico("i-scope")} Thermal`));
+      else if (u.nv) bits.push(stat("Night vision", `${ico("i-scope")} NV`));
+      if (u.reloadTime != null) bits.push(stat("Stock reload time", `${ico("i-refresh")} ${u.reloadTime}s`));
+      if (u.crewCount != null) bits.push(stat("Crew count", `${ico("i-users")} ${u.crewCount}`));
+      if (u.gunVel != null) {
+        const penStr = u.gunPen != null ? ` · ${u.gunPen}mm pen` : "";
+        bits.push(stat(`Fastest AP shell muzzle velocity${u.gunCal ? ` · ${u.gunCal}mm bore` : ""}${penStr ? ` · ${u.gunPen}mm pen at 1km` : ""}`, `${ico("i-target")} ${u.gunVel} m/s${penStr}`));
+      }
     } else if (slot.category === "spaa") {
       if (u.sam) bits.push(stat("Carries surface-to-air missiles", `${ico("i-missile")} SAM`));
       if (u.radar) bits.push(stat("Has a tracking radar", `${ico("i-radar")} Radar`));
       if (u.aaCal) bits.push(stat("Main gun caliber", `${ico("i-target")} ${u.aaCal}mm`));
     } else if (slot.category === "fighter") {
       if (u.turnTime != null) bits.push(stat("Sustained turn time", `${ico("i-turn")} ${u.turnTime}s turn`));
+      if (u.climbRate != null) bits.push(stat("Rate of climb", `${ico("i-bolt")} ${u.climbRate} m/s climb`));
     } else if (slot.category === "attacker" || slot.category === "heli") {
       if (u.atgm) bits.push(atgmBadge(u));
       if (u.ordnanceKg > 0) bits.push(stat("Bomb + rocket ordnance (guided bombs weighted double)", `${ico("i-bomb")} ${u.ordnanceKg.toLocaleString()} kg`));

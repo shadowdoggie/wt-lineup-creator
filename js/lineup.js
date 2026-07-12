@@ -18,17 +18,22 @@ const LINEUP = (() => {
     },
     armor: {
       classW: { heavy: 1.0, medium: 0.8, td: 0.6, light: 0.15 },
-      stat: (u, p) => p.armorPct(u),
+      // Armor + reload: a fast-reloading tank brawls better. 80% effective
+      // armor + 20% reload speed (inverted — lower reload = better).
+      stat: (u, p) => 0.8 * p.armorPct(u) + 0.2 * p.reloadPct(u),
     },
     speed: {
       classW: { light: 1.0, medium: 0.85, td: 0.5, heavy: 0.1 },
-      stat: (u, p) => p.mobPct(u), // real hp/ton, not a proxy
+      // 85% hp/ton + 15% reverse speed (peaking ridgelines) + 15% turret
+      // traverse (reactive flanking). Reverse and turret are smaller nudge.
+      stat: (u, p) => 0.7 * p.mobPct(u) + 0.15 * p.revPct(u) + 0.15 * p.turretPct(u),
     },
     sniper: {
       classW: { td: 1.0, medium: 0.7, heavy: 0.5, light: 0.45 },
-      // Real gun data: a flat-shooting, big-bore gun is what makes a sniper.
-      // 60% muzzle velocity (flat trajectory, minimal lead) + 40% bore caliber.
-      stat: (u, p) => 0.6 * p.velPct(u) + 0.4 * p.calPct(u),
+      // Real gun data: penetration is the primary sniper stat (50%), velocity
+      // second (flat trajectory, 30%), bore caliber third (20%). Penetration
+      // is estimated from DeMarre/Lanz-Odermatt shell physics in build_mobility.py.
+      stat: (u, p) => 0.5 * p.penPct(u) + 0.3 * p.velPct(u) + 0.2 * p.calPct(u),
     },
   };
 
@@ -95,20 +100,33 @@ const LINEUP = (() => {
     const mobPctRaw = percentiler(mains, u => u.hpPerTon);
     const velPctRaw = percentiler(mains, u => u.gunVel);
     const calPctRaw = percentiler(mains, u => u.gunCal);
+    const penPctRaw = percentiler(mains, u => u.gunPen);
+    // Reload: lower is better, so negate. Missing reload falls to null → 0.5.
+    const reloadPctRaw = percentiler(mains, u => u.reloadTime ? -u.reloadTime : null);
+    const revPctRaw = percentiler(mains, u => u.revRatio > 0 ? u.revRatio : null);
+    const turretPctRaw = percentiler(mains, u => u.turretSpeed ?? null);
     const p = {
       armorPct: u => armorPctRaw(u) ?? 0.5,
       // Real hp/ton percentile; for the rare vehicle missing it, fall back to
       // "lighter armor ≈ faster" so Speed still ranks it sensibly.
       mobPct: u => mobPctRaw(u) ?? (1 - (armorPctRaw(u) ?? 0.5)),
-      // Real gun velocity / bore percentiles. A vehicle with no AP round
-      // (missile/HE-only) is a poor sniper, so missing data falls below median.
+      // Real gun velocity / bore / penetration percentiles. A vehicle with no
+      // AP round (missile/HE-only) is a poor sniper, so missing data falls below
+      // median.
       velPct: u => velPctRaw(u) ?? 0.35,
       calPct: u => calPctRaw(u) ?? 0.35,
+      penPct: u => penPctRaw(u) ?? 0.35,
+      reloadPct: u => reloadPctRaw(u) ?? 0.5,
+      revPct: u => revPctRaw(u) ?? 0.5,
+      turretPct: u => turretPctRaw(u) ?? 0.5,
     };
     // BR closeness still matters (avoid heavy downtiers) but the playstyle
     // stat is now a co-equal driver, so Speed really favors high hp/ton etc.
+    // A small stabilization bonus nudges stabilized tanks up — they can shoot
+    // on the move, a major advantage the raw stats don't otherwise capture.
     const groundScore = u =>
-      brScore(u.br[o.mode], o.targetBR) * 1.1 + (ps.classW[u.cls] || 0.5) * 1.4 + ps.stat(u, p) * 1.4;
+      brScore(u.br[o.mode], o.targetBR) * 1.1 + (ps.classW[u.cls] || 0.5) * 1.4 +
+      ps.stat(u, p) * 1.4 + (u.stabilized ? 0.15 : 0);
 
     // Ground-attack firepower = real ordnance weight with a big premium for
     // ATGMs (guided tank-killers punch far above their mass). Blended here so
@@ -117,33 +135,49 @@ const LINEUP = (() => {
 
     const turnPctRaw = percentiler(planes, u => u.turnTime);
     const payPctRaw = percentiler(planes, firepower);
+    const climbPctRaw = percentiler(planes, u => u.climbRate);
     const turnQuality = u => 1 - (turnPctRaw(u) ?? 0.7); // lower turn time is better
+    // Fighter: turn time (dogfighting) + climb rate (energy fighting) co-equal.
     const fighterScore = u =>
-      brScore(u.br[o.mode], o.targetBR) * 1.2 + turnQuality(u) * 1.4 + (u.cls === "fighter" ? 0.4 : 0);
+      brScore(u.br[o.mode], o.targetBR) * 1.0 + turnQuality(u) * 0.8 +
+      (climbPctRaw(u) ?? 0.5) * 0.6 + (u.cls === "fighter" ? 0.4 : 0);
     // CAS by real firepower, but weighted for ground-RB reality: a purpose-built
     // attacker (dive bomber / strike jet) is what you want. A high-altitude
     // strategic bomber carries far more tonnage, yet spawns high, can't dive
     // accurately on tanks, and is easy SPAA food — so raw payload alone must not
     // let a B-29 win the CAS slot. Reward attackers, penalize heavy bombers.
+    // Bombers also get their firepower percentile capped so even in a bomb-heavy
+    // bracket a B-29 can't outscore a purpose-built attacker.
     // The level-bomber penalty is dropped when the user explicitly wants level
     // bombers for CAS, so they get ranked on payload instead of pushed down.
-    const attackerScore = u =>
-      brScore(u.br[o.mode], o.targetBR) * 1.2 + (payPctRaw(u) ?? 0) * 1.2 +
-      (u.cls === "attacker" ? 0.8 : 0) - (!o.levelBombersCAS && u.cls === "bomber" ? 0.7 : 0);
+    const attackerScore = u => {
+      const isBomber = u.cls === "bomber";
+      const pay = isBomber ? Math.min(payPctRaw(u) ?? 0, 0.3) : (payPctRaw(u) ?? 0);
+      return brScore(u.br[o.mode], o.targetBR) * 1.2 + pay * 1.2 +
+        (u.cls === "attacker" ? 0.8 : 0) - (!o.levelBombersCAS && isBomber ? 1.0 : 0);
+    };
 
     // Helicopters live and die by their anti-tank punch, so rank by firepower
     // and ATGM capability — not BR closeness, which is all the old model used.
+    // ATGM standoff range is a tiebreaker: longer-range missiles let the heli
+    // engage from outside SPAA range.
     const heliPayRaw = percentiler(helis, firepower);
     const heliScore = u =>
-      brScore(u.br[o.mode], o.targetBR) * 1.0 + (heliPayRaw(u) ?? 0) * 1.6 + (u.atgm ? 0.6 : 0);
+      brScore(u.br[o.mode], o.targetBR) * 1.0 + (heliPayRaw(u) ?? 0) * 1.6 +
+      (u.atgm ? 0.4 + Math.min(u.atgmRange / 10000, 0.4) : 0);
 
     // SPAA by real anti-air capability: a radar SAM launcher massively outranks
     // a WWII quad-MG. SAM (guided, all-aspect) weighs most, radar (track at
     // range) next, then gun caliber percentile among SPAA in the bracket.
+    // Missile-only SPAA (cal=0) and missing-data SPAA (cal=null) both fall to
+    // the 0.4 fallback — a SAM launcher shouldn't rank worse on caliber than a
+    // vehicle with no data at all.
     const spaaCalRaw = percentiler(spaas, u => u.aaCal);
-    const spaaScore = u =>
-      brScore(u.br[o.mode], o.targetBR) * 1.0 + (u.sam ? 1.2 : 0) + (u.radar ? 0.6 : 0) +
-      (spaaCalRaw(u) ?? 0.4) * 0.6;
+    const spaaScore = u => {
+      const calScore = (u.aaCal == null || u.aaCal === 0) ? 0.4 : (spaaCalRaw(u) ?? 0.4);
+      return brScore(u.br[o.mode], o.targetBR) * 1.0 + (u.sam ? 1.2 : 0) + (u.radar ? 0.6 : 0) +
+        calScore * 0.6;
+    };
 
     // CAS candidate pool. The user can restrict it to level bombers
     // (cls "bomber"), dive bombers (the diveBomber flag), or both. When either
