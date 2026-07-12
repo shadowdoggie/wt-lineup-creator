@@ -219,10 +219,6 @@
     if (!p) return;
     const setChk = (id, v) => { if (typeof v === "boolean") $(id).checked = v; };
     if (p.nation) $("nation").value = p.nation;
-    if (p.mode) {
-      state.mode = p.mode;
-      for (const b of $("modeSeg").children) b.classList.toggle("active", b.dataset.mode === p.mode);
-    }
     if (p.slots != null && p.slots !== "") $("slots").value = p.slots;
     if (p.planeRole) $("planeRole").value = p.planeRole;
     // Migrate old airCount "0" → planeRole none.
@@ -279,107 +275,31 @@
     return out;
   }
 
-  // ATGM badge for a CAS jet or attack heli, with standoff range when known.
-  // atgmQuality (0..1) reflects guidance type: fire-and-forget optic/MITL
-  // (Maverick, GROM, Kosava) is the CAS gold standard; manual-command MCLOS
-  // (Kh-23) is far weaker. Show the guidance class so the player can tell at a
-  // glance why a jet ranks where it does.
-  const ATGM_LABELS = [
-    { min: 0.8, label: "ATGM FF", title: "Fire-and-forget guided missiles (TV/optical or MITL)" },
-    { min: 0.5, label: "ATGM IR", title: "IR-homing guided missiles (fire-and-forget)" },
-    { min: 0.01, label: "ATGM MCLOS", title: "Manual-command guided missiles (short standoff, pilot steers)" },
-  ];
-  function atgmBadge(u) {
-    const km = u.atgmRange ? ` ~${(u.atgmRange / 1000).toFixed(u.atgmRange < 10000 ? 1 : 0)}km` : "";
-    const tier = ATGM_LABELS.find(t => u.atgmQuality >= t.min) || { label: "ATGM", title: "Anti-ground guided missiles" };
-    return `<span class="stat" title="${tier.title}${km ? " · standoff range" : ""}">${ico("i-missile")} ${tier.label}${km}</span>`;
-  }
-
-  // Role-relevant stat line: hp/ton + armor + gun for ground, radar/SAM/caliber
-  // for SPAA, turn time + climb for fighters, ordnance + ATGMs for CAS and helis.
+  // Card stat line. The lineup algorithm scores vehicles on real game-file
+  // stats (hp/ton, armor, gun velocity, AAM quality, ATGMs, thermals, …) but
+  // the cards stay clean: only the BR chip and the vehicle's rank are shown.
+  // Everything else is for the picker's eyes, not the player's — the player can
+  // verify loadouts and capabilities in-game.
   function metaBits(slot, mode) {
     const u = slot.unit;
     const stat = (title, inner) => `<span class="stat"${title ? ` title="${title}"` : ""}>${inner}</span>`;
-    const bits = [`<span class="br-chip">${u.br[mode].toFixed(1)}</span>`, stat("", `Rank ${u.rank}`)];
-    if (u.type === "tank" && slot.category !== "spaa") {
-      if (u.hpPerTon != null) bits.push(stat("Real horsepower-per-ton", `${ico("i-gauge")} ${u.hpPerTon} hp/t`));
-      const armor = [];
-      // Truthy (not `!= null`): open-top vehicles with 0 mm omit the shield line.
-      if (u.armorHull) armor.push(`H ${u.armorHull}`);
-      if (u.armorTurret) armor.push(`T ${u.armorTurret}`);
-      if (armor.length) {
-        bits.push(stat("Frontal steel thickness (mm) from the tank model", `${ico("i-shield")} ${armor.join(" / ")}`));
-      }
-      if (u.hasEra) bits.push(stat("ERA present on the model (spaded packs included)", `${ico("i-shield")} ERA`));
-      if (u.hasComposite) bits.push(stat("Composite / NERA arrays present on the model", `${ico("i-shield")} Composite`));
-      if (u.stabilized) bits.push(stat(u.stabPlanes === 2 ? "Two-plane stabilizer — fires accurately on the move in all axes" : "One-plane stabilizer — horizontal only, can't elevate on the move", `${ico("i-bolt")} Stab${u.stabPlanes === 2 ? " 2P" : ""}`));
-      if (u.thermal) bits.push(stat(`Thermal imaging (generation ${u.thermalGen || "?"})${u.thermalGen >= 3 ? " — smoke-piercing quality" : ""}`, `${ico("i-scope")} Thermal${u.thermalGen ? ` Gen ${u.thermalGen}` : ""}`));
-      else if (u.nv) bits.push(stat("Night vision", `${ico("i-scope")} NV`));
-      if (u.reloadTime != null) {
-        // "auto" only for real autoloaders (the game's own flag) — a 5s
-        // human-loaded gun is fast, not automatic.
-        bits.push(stat(u.autoLoader ? "Autoloader cycle" : "Stock manual reload (not crew-trained)",
-          `${ico("i-refresh")} ${u.reloadTime}s${u.autoLoader ? " auto" : ""}`));
-      }
-      if (u.crewCount != null) bits.push(stat("Crew count", `${ico("i-users")} ${u.crewCount}`));
-      // Gun velocity/caliber only on the card — no pen mm (table or estimate).
-      // Pen still influences Sniper/uptier ranking behind the scenes.
-      if (u.gunVel != null) {
-        const cal = u.gunCal ? ` · ${u.gunCal}mm` : "";
-        bits.push(stat(`Best equippable AP shell muzzle velocity${u.gunCal ? ` · ${u.gunCal}mm bore` : ""} (spaded)`,
-          `${ico("i-target")} ${u.gunVel} m/s${cal}`));
-      }
-    } else if (slot.category === "spaa") {
-      if (u.sam) bits.push(stat(`Surface-to-air missiles${u.samRange ? ` · ${u.samRange >= 1000 ? (u.samRange / 1000).toFixed(0) + "km" : u.samRange + "m"} standoff` : ""}`, `${ico("i-missile")} SAM${u.samRange ? ` ${(u.samRange / 1000).toFixed(0)}km` : ""}`));
-      if (u.radar) bits.push(stat(`${u.radarSearch ? "Search + tracking radar" : "Tracking radar"}${u.radarRange ? ` · ${u.radarRange >= 1000 ? (u.radarRange / 1000).toFixed(0) + "km" : u.radarRange + "m"} range` : ""}`, `${ico("i-radar")} ${u.radarSearch ? "SrRdr" : "Rdr"}${u.radarRange ? ` ${(u.radarRange / 1000).toFixed(0)}km` : ""}`));
-      if (u.aaCal) bits.push(stat(`Main gun caliber${u.gunAmmo ? ` · ${u.gunAmmo} rds` : ""}`, `${ico("i-target")} ${u.aaCal}mm${u.gunAmmo ? ` · ${u.gunAmmo}` : ""}`));
-    } else if (slot.category === "fighter") {
-      if (u.turnTime != null) bits.push(stat("Sustained turn time", `${ico("i-turn")} ${u.turnTime}s turn`));
-      if (u.climbRate != null) bits.push(stat("Rate of climb", `${ico("i-bolt")} ${u.climbRate} m/s climb`));
-      if (u.maxSpeed != null) bits.push(stat("Max speed (shop)", `${ico("i-gauge")} ${u.maxSpeed}`));
-      if (u.aam) {
-        const aamLabel = u.arh ? "AAM ARH" : u.sarh ? "AAM SARH" : u.aamQuality >= 0.6 ? "AAM HOBS" : u.aamQuality >= 0.5 ? "AAM All-asp" : "AAM";
-        const aamTitle = u.arh ? "Air-to-air missiles incl. active-radar (fire-and-forget BVR)"
-          : u.sarh ? "Air-to-air missiles incl. semi-active radar (must illuminate)"
-          : u.aamQuality >= 0.6 ? "High-off-boresight IR missiles (thrust-vectoring/HOBS)"
-          : u.aamQuality >= 0.5 ? "All-aspect IR missiles (can lock from any angle)"
-          : "Air-to-air missiles (rear-aspect IR)";
-        bits.push(stat(aamTitle, `${ico("i-missile")} ${aamLabel}`));
-      }
-      if (u.cm) bits.push(stat("Countermeasures (flares/chaff)", `${ico("i-radar")} CM`));
-    } else if (slot.category === "attacker" || slot.category === "heli") {
-      if (u.atgm) bits.push(atgmBadge(u));
-      if (u.ordnanceKg > 0) bits.push(stat("Best bomb + rocket ordnance across any preset (guided bombs weighted double)", `${ico("i-bomb")} ${u.ordnanceKg.toLocaleString()} kg`));
-      if (u.climbRate != null && slot.category === "attacker") bits.push(stat("Rate of climb", `${ico("i-bolt")} ${u.climbRate} m/s climb`));
-      if (!u.atgm && u.ordnanceKg === 0) bits.push(stat("", "Guns only"));
-    }
-    return bits.join(" ");
-  }
-
-  function needsSpadedNote(u) {
-    // Only where unlockables affect displayed/scored facts.
-    if (u.type === "aircraft" || u.type === "helicopter") return true;
-    if (u.type !== "tank") return false;
-    if (u.thermal || u.hasEra || u.hasComposite) return true;
-    if (u.gunPen != null && u.rank >= 4) return true;
-    return false;
+    return [
+      `<span class="br-chip">${u.br[mode].toFixed(1)}</span>`,
+      stat("", `Rank ${u.rank}`),
+    ].join(" ");
   }
 
   function slotCard(slot, i, mode, result) {
     const meta = badgeFor(slot);
     const pool = result.pools[slot.category] || [];
     const alts = pool.filter(u => !result.used.has(u.id)).length;
-    const sp = LINEUP.SPADED || {};
-    const spadedChip = needsSpadedNote(slot.unit)
-      ? `<span class="spaded-chip" title="${esc(sp.title || "")}">${ico("i-info")} ${esc(sp.short || "Spaded")}</span>`
-      : "";
     return `
       <div class="slot-card" style="--cls-color:${meta.color}">
         <div class="slot-head">
           <span class="slot-num">SLOT ${String(i + 1).padStart(2, "0")}</span>
           <span class="cls-badge">${meta.label}</span>
         </div>
-        <div class="veh-name">${esc(slot.unit.name)} ${srcBadges(slot.unit)} ${spadedChip}</div>
+        <div class="veh-name">${esc(slot.unit.name)} ${srcBadges(slot.unit)}</div>
         <div class="veh-meta">${metaBits(slot, mode)}</div>
         <button type="button" class="swap-btn" data-slot="${i}" ${alts ? "" : "disabled"}
           title="Swap for the next-best ${meta.label.toLowerCase()} (respects your playstyle)">
@@ -414,14 +334,12 @@
   function renderResult(result, o) {
     current = { result, options: o };
     const nationLabel = WT_DATA.NATIONS.find(n => n[0] === o.nation)?.[1] || o.nation;
-    const modeLabel = { arcade: "Arcade", realistic: "Realistic", simulator: "Simulator" }[o.mode];
     $("results").innerHTML = `
       ${result.warnings.length ? `<div class="warnings">${result.warnings.map(w => `<div class="warning">${ico("i-warn")} <span>${w}</span></div>`).join("")}</div>` : ""}
       <div class="results-head">
         <h2>${nationLabel}</h2>
         <div class="results-tags">
           <span class="tag tag-br">BR ${(o.targetBR - LINEUP.BR_WINDOW).toFixed(1)}–${o.targetBR.toFixed(1)}</span>
-          <span class="tag">${modeLabel}</span>
           <span class="tag">${result.slots.length} vehicles</span>
         </div>
       </div>
@@ -463,16 +381,6 @@
     // BR dropdown is built for the remembered nation + mode.
     applyPrefs(loadPrefs());
     updateBomberVis();
-
-    $("modeSeg").addEventListener("click", e => {
-      const btn = e.target.closest("button[data-mode]");
-      if (!btn) return;
-      state.mode = btn.dataset.mode;
-      for (const b of $("modeSeg").children) b.classList.toggle("active", b === btn);
-      refreshBROptions();
-      savePrefs();
-      if (current) tryGenerate();
-    });
 
     $("nation").addEventListener("change", () => {
       refreshBROptions();

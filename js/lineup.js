@@ -20,9 +20,9 @@ const LINEUP = (() => {
       "game's ArmorPower table; if missing, a labeled estimate is used for ranking. " +
       "Stock reload is not crew-trained.",
     note:
-      "Spaded game-file stats. Gun cards show velocity (not pen mm). Cards show factual " +
-      "steel + ERA/composite flags; armor RANKING uses an internal protection score that " +
-      "also counts composite arrays and ERA coverage. Reload is stock.",
+      "Lineups use spaded game-file stats — best equippable shells, ERA/composite, " +
+      "thermal/NV, real hp/ton and gun velocity. Armor ranking uses an internal " +
+      "protection score that counts composite arrays and ERA coverage. Reload is stock.",
   };
 
   // Ground playstyles. `stat` returns a 0..1 bonus from the vehicle's real

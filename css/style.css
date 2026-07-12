@@ -274,6 +274,16 @@ body {
   letter-spacing: 0;
 }
 p.hint { margin-top: 6px; line-height: 1.4; }
+.mode-note {
+  margin: 0;
+  padding: 7px 10px;
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  line-height: 1.4;
+  background: var(--inset);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+}
 .field-hint { margin: -4px 0 10px; }
 .field-hint-bottom { margin: 4px 0 0; }
 
