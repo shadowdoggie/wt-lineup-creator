@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WT Lineup Creator</title>
+<link rel="stylesheet" href="css/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎖️</text></svg>">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-icon">🎖️</span>
+    <div>
+      <h1>WT Lineup Creator</h1>
+      <p class="tagline">Live battle ratings, straight from the game files</p>
+    </div>
+  </div>
+  <div class="data-status" id="dataStatus">
+    <span id="dataStatusText">Loading game data…</span>
+    <button id="refreshBtn" class="link-btn" title="Re-download the latest vehicle data">↻ Refresh</button>
+  </div>
+</header>
+
+<div class="layout">
+
+  <aside class="panel form-panel">
+    <form id="lineupForm">
+
+      <div class="field">
+        <label for="nation">Nation</label>
+        <select id="nation"></select>
+      </div>
+
+      <div class="field">
+        <label>Game mode <span class="hint">(BRs differ per mode)</span></label>
+        <div class="segmented" id="modeSeg">
+          <button type="button" data-mode="arcade">Arcade</button>
+          <button type="button" data-mode="realistic" class="active">Realistic</button>
+          <button type="button" data-mode="simulator">Simulator</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="targetBR">Target battle rating</label>
+        <select id="targetBR"></select>
+        <p class="hint">Lineup is built from vehicles between your target BR and 1.0 below it.</p>
+      </div>
+
+      <div class="field">
+        <label for="slots">Crew slots</label>
+        <input type="number" id="slots" min="1" max="12" value="5">
+      </div>
+
+      <div class="field">
+        <label>Include in lineup</label>
+        <label class="check"><input type="checkbox" id="incSPAA" checked> SPAA <span class="hint">(anti-air)</span></label>
+        <label class="check"><input type="checkbox" id="incPlanes" checked> Aircraft <span class="hint">(fighter / CAS)</span></label>
+        <label class="check"><input type="checkbox" id="incHelis"> Helicopters</label>
+      </div>
+
+      <div class="field">
+        <label>Vehicle sources <span class="hint">(tech tree is always included)</span></label>
+        <label class="check"><input type="checkbox" id="incPremium"> Premium vehicles</label>
+        <label class="check"><input type="checkbox" id="incSquadron"> Squadron vehicles</label>
+        <label class="check"><input type="checkbox" id="incGift"> Event / gift vehicles</label>
+      </div>
+
+      <div class="field">
+        <label>Playstyle</label>
+        <div class="playstyles" id="playstyles">
+          <label class="ps-card"><input type="radio" name="playstyle" value="balanced" checked>
+            <span class="ps-icon">⚖️</span><span class="ps-name">Balanced</span>
+            <span class="ps-desc">A bit of everything</span></label>
+          <label class="ps-card"><input type="radio" name="playstyle" value="armor">
+            <span class="ps-icon">🛡️</span><span class="ps-name">Armor</span>
+            <span class="ps-desc">Heavies &amp; brawling</span></label>
+          <label class="ps-card"><input type="radio" name="playstyle" value="speed">
+            <span class="ps-icon">⚡</span><span class="ps-name">Speed</span>
+            <span class="ps-desc">Lights &amp; flanking</span></label>
+          <label class="ps-card"><input type="radio" name="playstyle" value="sniper">
+            <span class="ps-icon">🎯</span><span class="ps-name">Sniper</span>
+            <span class="ps-desc">Tank destroyers</span></label>
+        </div>
+      </div>
+
+      <button type="submit" class="generate-btn" id="generateBtn" disabled>Generate lineup</button>
+    </form>
+  </aside>
+
+  <main class="results" id="results">
+    <div class="placeholder" id="placeholder">
+      <div class="placeholder-icon">🧭</div>
+      <p>Pick a nation, BR and playstyle, then hit <strong>Generate lineup</strong>.</p>
+    </div>
+  </main>
+
+</div>
+
+<div class="loading-overlay" id="loadingOverlay">
+  <div class="loading-box">
+    <div class="spinner"></div>
+    <h2>Downloading game data</h2>
+    <p class="hint">~4 MB from the War Thunder datamine mirror — cached afterwards</p>
+    <ul class="load-steps">
+      <li id="step-wpcost">Battle ratings &amp; economy</li>
+      <li id="step-unittags">Vehicle classes &amp; armor</li>
+      <li id="step-names">Vehicle names</li>
+    </ul>
+    <p class="load-error" id="loadError" hidden></p>
+  </div>
+</div>
+
+<script src="js/data.js"></script>
+<script src="js/lineup.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
