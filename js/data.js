@@ -39,7 +39,7 @@ const WT_DATA = (() => {
   // Cache key is derived from a fingerprint of the fields buildUnits emits, so
   // any change to the unit shape automatically invalidates stale caches — no
   // more remembering to bump a manual "_v2". Add new fields to this string.
-  const SCHEMA = "id name country type cls rank br premium squadron gift " +
+  const SCHEMA = "id name country type cls diveBomber rank br premium squadron gift " +
     "researchPoints armorHull armorTurret hpPerTon gunVel gunCal turnTime " +
     "ordnanceKg atgm atgmRange sam radar aaCal";
   function hash32(s) {
@@ -177,6 +177,10 @@ const WT_DATA = (() => {
         country,
         type,
         cls,
+        // Dive bombers (Stukas etc.) are classed as "attacker" for the CAS slot,
+        // but we flag them separately so the user can restrict CAS to just dive
+        // bombers vs just level/strategic bombers (cls === "bomber").
+        diveBomber: !!tags.type_dive_bomber,
         rank: w.rank || 1,
         // Research points (RP) to unlock. 0 for premium/gift/starter vehicles.
         // Used only as a tiebreak between equally-scored picks (prefer the more

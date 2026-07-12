@@ -28,7 +28,7 @@
 
   // Form state is remembered across page reloads (see save/loadPrefs). Bump the
   // key if the set of saved fields changes in an incompatible way.
-  const PREFS_KEY = "wtlc_prefs_v1";
+  const PREFS_KEY = "wtlc_prefs_v2";
 
   /* ---------- data loading ---------- */
 
@@ -123,7 +123,8 @@
       incSPAA: $("incSPAA").checked,
       incHelis: $("incHelis").checked,
       planeRole: $("planeRole").value,
-      bombersOnlyCAS: $("bombersOnlyCAS").checked,
+      levelBombersCAS: $("levelBombersCAS").checked,
+      diveBombersCAS: $("diveBombersCAS").checked,
       incPremium: $("incPremium").checked,
       incSquadron: $("incSquadron").checked,
       incGift: $("incGift").checked,
@@ -133,7 +134,7 @@
 
   /* ---------- preference persistence ---------- */
 
-  // "Only bombers for CAS" only matters when a CAS slot exists, so hide it for
+  // The bomber CAS options only matter when a CAS slot exists, so hide them for
   // fighter-only / no-aircraft roles to avoid a confusing dead option.
   function updateBomberVis() {
     const role = $("planeRole").value;
@@ -151,7 +152,8 @@
       incSPAA: $("incSPAA").checked,
       incHelis: $("incHelis").checked,
       planeRole: $("planeRole").value,
-      bombersOnlyCAS: $("bombersOnlyCAS").checked,
+      levelBombersCAS: $("levelBombersCAS").checked,
+      diveBombersCAS: $("diveBombersCAS").checked,
       incPremium: $("incPremium").checked,
       incSquadron: $("incSquadron").checked,
       incGift: $("incGift").checked,
@@ -182,7 +184,8 @@
     if (p.planeRole) $("planeRole").value = p.planeRole;
     setChk("incSPAA", p.incSPAA);
     setChk("incHelis", p.incHelis);
-    setChk("bombersOnlyCAS", p.bombersOnlyCAS);
+    setChk("levelBombersCAS", p.levelBombersCAS);
+    setChk("diveBombersCAS", p.diveBombersCAS);
     setChk("incPremium", p.incPremium);
     setChk("incSquadron", p.incSquadron);
     setChk("incGift", p.incGift);
