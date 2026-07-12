@@ -4,6 +4,8 @@
  * renders generated lineups, and handles per-slot vehicle swaps. */
 (() => {
   const $ = id => document.getElementById(id);
+  // Inline SVG icon from the sprite in index.html.
+  const ico = id => `<svg class="ico" aria-hidden="true"><use href="#${id}"/></svg>`;
 
   const CLS_META = {
     light:    { label: "LIGHT TANK", color: "var(--c-light)" },
@@ -74,7 +76,7 @@
   function renderDataWarnings(warnings) {
     const el = $("dataWarnings");
     if (!warnings || !warnings.length) { el.hidden = true; el.innerHTML = ""; return; }
-    el.innerHTML = `<strong>⚠️ Data check:</strong> ${warnings.map(esc).join(" ")}`;
+    el.innerHTML = `<strong>${ico("i-warn")} Data check:</strong> ${warnings.map(esc).join(" ")}`;
     el.hidden = false;
   }
 
@@ -85,7 +87,7 @@
       status = `cached ${new Date(res.fetchedAt).toLocaleDateString()} (couldn't reach the mirror)`;
     } else if (res.upToDate) {
       const d = res.gameDataDate ? new Date(res.gameDataDate).toLocaleDateString() : null;
-      status = `<span class="fresh">✔ up to date with the game files</span>${d ? ` (last change ${d})` : ""}`;
+      status = `<span class="fresh">${ico("i-check")} up to date with the game files</span>${d ? ` (last change ${d})` : ""}`;
     } else {
       status = `fetched ${new Date(res.fetchedAt).toLocaleDateString()}`;
     }
@@ -228,42 +230,43 @@
 
   function srcBadges(u) {
     let out = "";
-    if (u.premium) out += `<span class="src-badge" title="Premium vehicle">⭐</span>`;
-    if (u.squadron) out += `<span class="src-badge" title="Squadron vehicle">🤝</span>`;
-    if (u.gift) out += `<span class="src-badge" title="Event / gift vehicle">🎁</span>`;
+    if (u.premium) out += `<span class="src-badge src-premium" title="Premium vehicle">${ico("i-star")}</span>`;
+    if (u.squadron) out += `<span class="src-badge src-squadron" title="Squadron vehicle">${ico("i-users")}</span>`;
+    if (u.gift) out += `<span class="src-badge src-gift" title="Event / gift vehicle">${ico("i-gift")}</span>`;
     return out;
   }
 
   // ATGM badge for a CAS jet or attack heli, with standoff range when known.
   function atgmBadge(u) {
     const km = u.atgmRange ? ` ~${(u.atgmRange / 1000).toFixed(u.atgmRange < 10000 ? 1 : 0)}km` : "";
-    return `<span title="Carries anti-ground guided missiles${km ? " · standoff range" : ""}">🚀 ATGM${km}</span>`;
+    return `<span class="stat" title="Carries anti-ground guided missiles${km ? " · standoff range" : ""}">${ico("i-missile")} ATGM${km}</span>`;
   }
 
   // Role-relevant stat line: hp/ton + armor + gun for ground, radar/SAM/caliber
   // for SPAA, turn time for fighters, ordnance + ATGMs for CAS and helis.
   function metaBits(slot, mode) {
     const u = slot.unit;
-    const bits = [`<span class="br-chip">${u.br[mode].toFixed(1)}</span>`, `<span>Rank ${u.rank}</span>`];
+    const stat = (title, inner) => `<span class="stat"${title ? ` title="${title}"` : ""}>${inner}</span>`;
+    const bits = [`<span class="br-chip">${u.br[mode].toFixed(1)}</span>`, stat("", `Rank ${u.rank}`)];
     if (u.type === "tank" && slot.category !== "spaa") {
-      if (u.hpPerTon != null) bits.push(`<span title="Real horsepower-per-ton">${u.hpPerTon} hp/t</span>`);
+      if (u.hpPerTon != null) bits.push(stat("Real horsepower-per-ton", `${ico("i-gauge")} ${u.hpPerTon} hp/t`));
       const armor = [];
       // Truthy (not `!= null`): an open-top / unarmored vehicle like the M56 has
-      // 0 mm here, and "🛡️ 0" reads oddly — omit the value entirely instead.
+      // 0 mm here, and a shield icon next to 0 reads oddly — omit it instead.
       if (u.armorHull) armor.push(`H ${u.armorHull}`);
       if (u.armorTurret) armor.push(`T ${u.armorTurret}`);
-      if (armor.length) bits.push(`<span title="Frontal armor (mm)">🛡️ ${armor.join(" / ")}</span>`);
-      if (u.gunVel != null) bits.push(`<span title="Fastest AP shell muzzle velocity${u.gunCal ? ` · ${u.gunCal}mm bore` : ""}">🎯 ${u.gunVel} m/s</span>`);
+      if (armor.length) bits.push(stat("Frontal armor (mm)", `${ico("i-shield")} ${armor.join(" / ")}`));
+      if (u.gunVel != null) bits.push(stat(`Fastest AP shell muzzle velocity${u.gunCal ? ` · ${u.gunCal}mm bore` : ""}`, `${ico("i-target")} ${u.gunVel} m/s`));
     } else if (slot.category === "spaa") {
-      if (u.sam) bits.push(`<span title="Carries surface-to-air missiles">🚀 SAM</span>`);
-      if (u.radar) bits.push(`<span title="Has a tracking radar">📡 radar</span>`);
-      if (u.aaCal) bits.push(`<span title="Main gun caliber">🎯 ${u.aaCal}mm</span>`);
+      if (u.sam) bits.push(stat("Carries surface-to-air missiles", `${ico("i-missile")} SAM`));
+      if (u.radar) bits.push(stat("Has a tracking radar", `${ico("i-radar")} Radar`));
+      if (u.aaCal) bits.push(stat("Main gun caliber", `${ico("i-target")} ${u.aaCal}mm`));
     } else if (slot.category === "fighter") {
-      if (u.turnTime != null) bits.push(`<span title="Sustained turn time">↻ ${u.turnTime}s turn</span>`);
+      if (u.turnTime != null) bits.push(stat("Sustained turn time", `${ico("i-turn")} ${u.turnTime}s turn`));
     } else if (slot.category === "attacker" || slot.category === "heli") {
       if (u.atgm) bits.push(atgmBadge(u));
-      if (u.ordnanceKg > 0) bits.push(`<span title="Bomb + rocket ordnance (guided bombs weighted double)">💣 ${u.ordnanceKg.toLocaleString()} kg</span>`);
-      if (!u.atgm && u.ordnanceKg === 0) bits.push(`<span>guns only</span>`);
+      if (u.ordnanceKg > 0) bits.push(stat("Bomb + rocket ordnance (guided bombs weighted double)", `${ico("i-bomb")} ${u.ordnanceKg.toLocaleString()} kg`));
+      if (!u.atgm && u.ordnanceKg === 0) bits.push(stat("", "Guns only"));
     }
     return bits.join(" ");
   }
@@ -275,14 +278,14 @@
     return `
       <div class="slot-card" style="--cls-color:${meta.color}">
         <div class="slot-head">
-          <span class="slot-num">SLOT ${i + 1}</span>
+          <span class="slot-num">SLOT ${String(i + 1).padStart(2, "0")}</span>
           <span class="cls-badge">${meta.label}</span>
         </div>
         <div class="veh-name">${esc(slot.unit.name)} ${srcBadges(slot.unit)}</div>
         <div class="veh-meta">${metaBits(slot, mode)}</div>
         <button class="swap-btn" data-slot="${i}" ${alts ? "" : "disabled"}
           title="Swap for the next-best ${meta.label.toLowerCase()} (respects your playstyle)">
-          ⟳ Swap${alts ? ` <span class="alt-count">${alts} more</span>` : " (none left)"}
+          ${ico("i-swap")} Swap${alts ? ` <span class="alt-count">${alts} more</span>` : ` <span class="alt-count">none left</span>`}
         </button>
       </div>`;
   }
@@ -291,12 +294,13 @@
   // LINEUP.assess (top BR, competitive-respawn count, etc.).
   function healthPanel(h) {
     if (!h) return "";
-    const NOTE_ICON = { good: "✅", info: "ℹ️", warn: "⚠️" };
+    const NOTE_ICON = { good: ico("i-check"), info: ico("i-info"), warn: ico("i-warn") };
+    const VERDICT_ICON = { strong: ico("i-check"), solid: ico("i-shield"), thin: ico("i-warn") };
     const stat = (label, val) => `<div class="hc-stat"><span class="hc-val">${val}</span><span class="hc-lbl">${label}</span></div>`;
     return `
       <div class="health-card hc-${h.verdict.key}">
         <div class="hc-head">
-          <span class="hc-verdict">${h.verdict.label}</span>
+          <span class="hc-verdict">${VERDICT_ICON[h.verdict.key] || ""} ${h.verdict.label}</span>
           <div class="hc-stats">
             ${stat("queue BR", h.topBR.toFixed(1))}
             ${stat("competitive respawns", `${h.core}/${h.total}`)}
@@ -304,7 +308,7 @@
           </div>
         </div>
         <ul class="hc-notes">
-          ${h.notes.map(n => `<li class="hc-${n.level}">${NOTE_ICON[n.level] || "•"} ${esc(n.text)}</li>`).join("")}
+          ${h.notes.map(n => `<li class="hc-${n.level}">${NOTE_ICON[n.level] || ""} <span>${esc(n.text)}</span></li>`).join("")}
         </ul>
       </div>`;
   }
@@ -314,13 +318,19 @@
     const nationLabel = WT_DATA.NATIONS.find(n => n[0] === o.nation)?.[1] || o.nation;
     const modeLabel = { arcade: "Arcade", realistic: "Realistic", simulator: "Simulator" }[o.mode];
     $("results").innerHTML = `
-      ${result.warnings.length ? `<div class="warnings">${result.warnings.map(w => `<div class="warning">⚠️ ${w}</div>`).join("")}</div>` : ""}
-      <h2>${nationLabel} · BR ${(o.targetBR - LINEUP.BR_WINDOW).toFixed(1)}–${o.targetBR.toFixed(1)}
-        <span class="sub">· ${modeLabel} · ${result.slots.length} vehicles</span></h2>
+      ${result.warnings.length ? `<div class="warnings">${result.warnings.map(w => `<div class="warning">${ico("i-warn")} <span>${w}</span></div>`).join("")}</div>` : ""}
+      <div class="results-head">
+        <h2>${nationLabel}</h2>
+        <div class="results-tags">
+          <span class="tag tag-br">BR ${(o.targetBR - LINEUP.BR_WINDOW).toFixed(1)}–${o.targetBR.toFixed(1)}</span>
+          <span class="tag">${modeLabel}</span>
+          <span class="tag">${result.slots.length} vehicles</span>
+        </div>
+      </div>
       ${healthPanel(result.health)}
       <div class="lineup-grid">${result.slots.map((s, i) => slotCard(s, i, o.mode, result)).join("")}</div>
       <p class="pool-note">${result.poolSize} vehicles matched your filters in this bracket.
-        Use <strong>⟳ Swap</strong> on any slot to cycle to the next-best pick of that role — handy for
+        Use <strong>Swap</strong> on any slot to cycle to the next-best pick of that role — handy for
         swapping a premium you don't own for one you do. Hit Generate to reroll from scratch.</p>`;
   }
 
