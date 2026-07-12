@@ -311,16 +311,15 @@
           `${ico("i-refresh")} ${u.reloadTime}s${auto ? " auto" : ""}`));
       }
       if (u.crewCount != null) bits.push(stat("Crew count", `${ico("i-users")} ${u.crewCount}`));
-      if (u.gunVel != null || u.gunPen != null) {
+      // Only show pen when it comes from the game's ArmorPower table. Estimates
+      // still feed ranking behind the scenes, but fake-looking mm on the card
+      // is worse than showing velocity alone.
+      if (u.gunVel != null || (u.gunPen != null && u.gunPenSrc === "table")) {
         const parts = [];
         if (u.gunVel != null) parts.push(`${u.gunVel} m/s`);
-        if (u.gunPen != null) {
-          parts.push(u.gunPenSrc === "est" ? `~${u.gunPen}mm est.` : `${u.gunPen}mm pen`);
-        }
-        const title = u.gunPen != null
-          ? (u.gunPenSrc === "est"
-            ? `Best equippable AP shell — pen is a physics estimate (no ArmorPower table in game files)`
-            : `Best equippable AP shell — ArmorPower pen at 1 km from game files (spaded shell)`)
+        if (u.gunPen != null && u.gunPenSrc === "table") parts.push(`${u.gunPen}mm pen`);
+        const title = (u.gunPen != null && u.gunPenSrc === "table")
+          ? `Best equippable AP shell — ArmorPower pen at 1 km from game files (spaded shell)`
           : `Best equippable AP shell — muzzle velocity${u.gunCal ? ` · ${u.gunCal}mm bore` : ""}`;
         bits.push(stat(title, `${ico("i-target")} ${parts.join(" · ")}`));
       }

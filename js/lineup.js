@@ -20,9 +20,9 @@ const LINEUP = (() => {
       "game's ArmorPower table; if missing, a labeled estimate is used for ranking. " +
       "Stock reload is not crew-trained.",
     note:
-      "Spaded game-file stats. Pen marked “est.” is a physics fallback when the shell " +
-      "has no ArmorPower table — table values are preferred. Armor is steel + ERA/" +
-      "composite flags (not invented mm). Reload is stock.",
+      "Spaded game-file stats. Penetration is only shown when the game stores an " +
+      "ArmorPower table; otherwise velocity alone is listed (estimates may still " +
+      "help ranking silently). Armor is steel + ERA/composite flags. Reload is stock.",
   };
 
   // Ground playstyles. `stat` returns a 0..1 bonus from the vehicle's real
