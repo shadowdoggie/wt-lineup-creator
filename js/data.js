@@ -51,7 +51,7 @@ const WT_DATA = (() => {
     "crewCount reloadTime turretSpeed " +
     "ordnanceKg atgm atgmQuality atgmRange aam arh sarh aamQuality cm " +
     "sam samRange radar radarSearch radarRange gunAmmo aaCal " +
-    "fmt:hybrid-pen-table|est;armor:steel+flags+eff;reload:al-flag;air:aam-quality;spaa:range+radar";
+    "fmt:hybrid-pen-table|est;armor:steel+flags+eff;reload:al-flag;air:aam-quality+guid-by-name;spaa:range+radar";
   function hash32(s) {
     let h = 2166136261;
     for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
@@ -172,54 +172,72 @@ const WT_DATA = (() => {
   // so we grade by missile family name from sum_weapons — the same approach the
   // game's own community uses to rank AAM lethality.
   //
+  // IMPORTANT: the wpcost aamGuidanceType field is NOT a reliable per-missile
+  // guidance tag. Gaijin only marks ARH presets ("arh"); every SARH and IR
+  // missile preset is tagged "default" — including AIM-7 Sparrow, R-27R, Skyflash,
+  // Aspide, Matra 530. Relying on it for the sarh flag made every SARH fighter
+  // (F-4 Phantom, F-15A, Tornado F.3, MiG-29, Su-27, MiG-23, Mirage F1, …) fall
+  // through to the "AAM HOBS" card label, because their SARH missiles score
+  // 0.65–0.75 (>= 0.6) by name. So both the guidance CLASS and the quality tier
+  // are derived from the missile name here, never from aamGuidanceType.
+  //
+  // Guidance classes (stored alongside each quality tier):
+  //   "ir"   — infrared (rear-aspect, all-aspect, and HOBS)
+  //   "sarh" — semi-active radar homing (launcher must illuminate the whole flight)
+  //   "arh"  — active-radar homing (fire-and-forget BVR, top tier)
+  //
   // Quality tiers (0..1):
   //   0.3 — rear-aspect-only early IR (AIM-9B/E/J/P, R-3S, Shafrir)
   //   0.5 — all-aspect IR (AIM-9L/M, R-60M, Magic 2, Python 3)
   //   0.6 — HOBS/high-off-boresight IR (R-73, AIM-9X, AAM-3, IRIS-T)
   //   0.7 — SARH (AIM-7, R-27R/ER, Skyflash, Matra 530D, Aspide)
   //   1.0 — ARH fire-and-forget (AIM-120, R-77, MICA, Derby, PL-12, AAM-4)
-  const AAM_QUALITY_BY_NAME = {
+  const AAM_BY_NAME = {
     // ARH (active-radar homing) — fire-and-forget BVR, top tier
-    "aim_120": 1.0, "aim_120a": 1.0, "aim_120b": 1.0, "aim_120c": 1.0, "aim_120d": 1.0,
-    "r_77": 1.0, "rvv_ae": 1.0, "rvv_sd": 1.0, "r_77_1": 1.0,
-    "pl12": 1.0, "pl_12": 1.0, "pl12a": 1.0, "sd10a": 1.0,
-    "mica_em": 1.0, "derby": 1.0, "r_darter": 1.0, "aam4": 1.0,
-    "aim_54": 1.0, "aim_54a": 1.0, "aim_54c": 1.0, "fakour_90": 1.0,
-    "rb99": 1.0, "meteor": 1.0,
+    "aim_120": [1.0,"arh"], "aim_120a": [1.0,"arh"], "aim_120b": [1.0,"arh"], "aim_120c": [1.0,"arh"], "aim_120d": [1.0,"arh"],
+    "r_77": [1.0,"arh"], "rvv_ae": [1.0,"arh"], "rvv_sd": [1.0,"arh"], "r_77_1": [1.0,"arh"],
+    "pl12": [1.0,"arh"], "pl_12": [1.0,"arh"], "pl12a": [1.0,"arh"], "sd10a": [1.0,"arh"],
+    "mica_em": [1.0,"arh"], "derby": [1.0,"arh"], "r_darter": [1.0,"arh"], "aam4": [1.0,"arh"],
+    "aim_54": [1.0,"arh"], "aim_54a": [1.0,"arh"], "aim_54c": [1.0,"arh"], "fakour_90": [1.0,"arh"],
+    "rb99": [1.0,"arh"], "meteor": [1.0,"arh"],
     // HOBS / high-off-boresight IR with thrust-vectoring or large seeker gimbal
-    "r_73": 0.6, "r_73e": 0.6, "aim9x": 0.6, "aim_9x": 0.6,
-    "aam3": 0.6, "iris_t": 0.6, "pyton_3": 0.6, "python_3": 0.6,
-    "rb74": 0.55, "rb74m": 0.55, // Rb74 is IRIS-T or AIM-9L depending on variant
+    "r_73": [0.6,"ir"], "r_73e": [0.6,"ir"], "aim9x": [0.6,"ir"], "aim_9x": [0.6,"ir"],
+    "aam3": [0.6,"ir"], "iris_t": [0.6,"ir"], "pyton_3": [0.6,"ir"], "python_3": [0.6,"ir"],
+    "rb74": [0.55,"ir"], "rb74m": [0.55,"ir"], // Rb74 is IRIS-T or AIM-9L depending on variant
     // All-aspect IR — can lock from any aspect, flare-resistant
-    "aim9l": 0.5, "aim_9l": 0.5, "aim9m": 0.5, "aim_9m": 0.5,
-    "r_60m": 0.5, "r_60mk": 0.5, "r_27t": 0.5, "r_27et": 0.5,
-    "r_550_magic_2": 0.5, "magic_2": 0.5, "aa20": 0.5,
-    "pl8b": 0.5, "pl_8b": 0.5, "pl5c": 0.5, "pl_5c": 0.5, "pl5e2": 0.5,
-    "redtop": 0.5, "firestreak": 0.4,
-    "rb24j": 0.5, // Rb24J = AIM-9L equivalent
+    "aim9l": [0.5,"ir"], "aim_9l": [0.5,"ir"], "aim9m": [0.5,"ir"], "aim_9m": [0.5,"ir"],
+    "r_60m": [0.5,"ir"], "r_60mk": [0.5,"ir"], "r_27t": [0.5,"ir"], "r_27et": [0.5,"ir"],
+    "r_550_magic_2": [0.5,"ir"], "magic_2": [0.5,"ir"], "aa20": [0.5,"ir"],
+    "pl8b": [0.5,"ir"], "pl_8b": [0.5,"ir"], "pl5c": [0.5,"ir"], "pl_5c": [0.5,"ir"], "pl5e2": [0.5,"ir"],
+    "redtop": [0.5,"ir"], "firestreak": [0.4,"ir"],
+    "rb24j": [0.5,"ir"], // Rb24J = AIM-9L equivalent
     // SARH (semi-active radar homing) — launcher must illuminate the whole flight
-    "aim7": 0.7, "aim_7": 0.7, "aim7m": 0.7, "aim7f": 0.7, "aim7e": 0.7, "aim7p": 0.7,
-    "skyflash": 0.7, "r_27r": 0.7, "r_27er": 0.75, "r_27r1": 0.7, "r_27er1": 0.75,
-    "matra_super_530d": 0.7, "matra_super_530f": 0.7, "r_530_matra_radar": 0.65,
-    "aspide_1a": 0.7, "sedjil": 0.7,
-    "r_23r": 0.65, "r_24r": 0.7, "r_3r": 0.5, "r_40rd": 0.6,
+    "aim7": [0.7,"sarh"], "aim_7": [0.7,"sarh"], "aim7m": [0.7,"sarh"], "aim7f": [0.7,"sarh"], "aim7e": [0.7,"sarh"], "aim7p": [0.7,"sarh"],
+    "skyflash": [0.7,"sarh"], "r_27r": [0.7,"sarh"], "r_27er": [0.75,"sarh"], "r_27r1": [0.7,"sarh"], "r_27er1": [0.75,"sarh"],
+    "matra_super_530d": [0.7,"sarh"], "matra_super_530f": [0.7,"sarh"], "r_530_matra_radar": [0.65,"sarh"],
+    "aspide_1a": [0.7,"sarh"], "sedjil": [0.7,"sarh"],
+    "r_23r": [0.65,"sarh"], "r_24r": [0.7,"sarh"], "r_3r": [0.5,"sarh"], "r_40rd": [0.6,"sarh"],
     // Early / rear-aspect-only IR — tail-chase-only, easily defeated
-    "aim9b": 0.3, "aim_9b": 0.3, "aim9c": 0.3, "aim_9c": 0.3,
-    "aim9d": 0.35, "aim_9d": 0.35, "aim9e": 0.35, "aim_9e": 0.35,
-    "aim9g": 0.35, "aim9h": 0.35, "aim9j": 0.3, "aim_9j": 0.3,
-    "aim9n": 0.3, "aim9p": 0.3, "aim_9p": 0.3, "aim9p4": 0.3, "aim_9p4": 0.3,
-    "r_3s": 0.3, "r_13m1": 0.3, "r_13m": 0.3, "r_60": 0.35,
-    "r_23t": 0.3, "r_24t": 0.3, "r_27t1": 0.45, "r_27et1": 0.5,
-    "r_550_magic": 0.35, "r_511_matra": 0.3, "r_530_matra_ir": 0.35,
-    "shafrir_1": 0.25, "shafrir_2": 0.35,
-    "pl2": 0.3, "pl5b": 0.35, "pl_5b": 0.35, "pl7": 0.4, "pl8": 0.45,
-    "aim4f_falcon": 0.3, "aim4g_falcon": 0.3,
-    "rb24": 0.3, "rb71": 0.5, // Rb24 = AIM-9B, Rb71 = Skyflash
-    "maa_1": 0.3, "a91": 0.3,
-    "lwf_63": 0.25, "lwf_63_75": 0.25, "lwf_63_80": 0.25,
+    "aim9b": [0.3,"ir"], "aim_9b": [0.3,"ir"], "aim9c": [0.3,"ir"], "aim_9c": [0.3,"ir"],
+    "aim9d": [0.35,"ir"], "aim_9d": [0.35,"ir"], "aim9e": [0.35,"ir"], "aim_9e": [0.35,"ir"],
+    "aim9g": [0.35,"ir"], "aim9h": [0.35,"ir"], "aim9j": [0.3,"ir"], "aim_9j": [0.3,"ir"],
+    "aim9n": [0.3,"ir"], "aim9p": [0.3,"ir"], "aim_9p": [0.3,"ir"], "aim9p4": [0.3,"ir"], "aim_9p4": [0.3,"ir"],
+    "r_3s": [0.3,"ir"], "r_13m1": [0.3,"ir"], "r_13m": [0.3,"ir"], "r_60": [0.35,"ir"],
+    "r_23t": [0.3,"ir"], "r_24t": [0.3,"ir"], "r_27t1": [0.45,"ir"], "r_27et1": [0.5,"ir"],
+    "r_550_magic": [0.35,"ir"], "r_511_matra": [0.3,"ir"], "r_530_matra_ir": [0.35,"ir"],
+    "shafrir_1": [0.25,"ir"], "shafrir_2": [0.35,"ir"],
+    "pl2": [0.3,"ir"], "pl5b": [0.35,"ir"], "pl_5b": [0.35,"ir"], "pl7": [0.4,"ir"], "pl8": [0.45,"ir"],
+    "aim4f_falcon": [0.3,"ir"], "aim4g_falcon": [0.3,"ir"],
+    "rb24": [0.3,"ir"], "rb71": [0.5,"sarh"], // Rb24 = AIM-9B, Rb71 = Skyflash (SARH)
+    "maa_1": [0.3,"ir"], "a91": [0.3,"ir"],
+    "lwf_63": [0.25,"ir"], "lwf_63_75": [0.25,"ir"], "lwf_63_80": [0.25,"ir"],
   };
 
-  function aamNameQuality(name) {
+  // aamNameInfo(name) -> { q: 0..1, g: "ir"|"sarh"|"arh"|null } or null if the
+  // weapon isn't a recognized AAM. The guidance class comes from the missile
+  // name, NOT wpcost's aamGuidanceType (which tags every SARH/IR preset as
+  // "default" — see the note above).
+  function aamNameInfo(name) {
     // Strip prefix (rocketguns_<country>_) and known variant suffixes to get
     // the canonical missile name, then look it up. Weapon names in sum_weapons
     // look like "rocketguns_us_aim9m_sidewinder_default" — we need to strip
@@ -228,17 +246,18 @@ const WT_DATA = (() => {
       .replace(/^(us|germ|ussr|uk|jp|cn|it|fr|sw|su|il|sww|swd|sws|ro|ir|rus)_/, "")
       .replace(/_default$|_bol_pod$|_missile_test$|_switzerland$|_iaf$|_hungary$|_germany$|_italy$|_china$|_japan$|_thailand$/, "");
     // Exact match first
-    if (n in AAM_QUALITY_BY_NAME) return AAM_QUALITY_BY_NAME[n];
+    if (n in AAM_BY_NAME) { const e = AAM_BY_NAME[n]; return { q: e[0], g: e[1] }; }
     // Check if any table key is a prefix of the name (longest match wins).
     // This handles names like "aim9m_sidewinder" -> matches "aim9m",
     // "aim_120a" -> matches "aim_120", "aim7m_sparrow_f_16" -> matches "aim7m".
     let bestKey = null;
-    for (const key of Object.keys(AAM_QUALITY_BY_NAME)) {
+    for (const key of Object.keys(AAM_BY_NAME)) {
       if (n.startsWith(key) && (!bestKey || key.length > bestKey.length)) {
         bestKey = key;
       }
     }
-    return bestKey ? AAM_QUALITY_BY_NAME[bestKey] : 0;
+    if (bestKey) { const e = AAM_BY_NAME[bestKey]; return { q: e[0], g: e[1] }; }
+    return null;
   }
 
   function airCombat(w) {
@@ -246,24 +265,19 @@ const WT_DATA = (() => {
     let bestQuality = 0;
     for (const preset of Object.values(w.weapons || {})) {
       if (preset.hasCountermeasures) cm = true;
-      const g = preset.aamGuidanceType;
-      if (g == null) continue;
-      const types = Array.isArray(g) ? g : [g];
-      let presetHasAAM = false;
-      for (const t of types) {
-        const s = String(t).toLowerCase();
-        if (s === "arh") { arh = true; presetHasAAM = true; }
-        else if (s === "sarh" || (s.includes("radar") && s !== "arh")) { sarh = true; presetHasAAM = true; }
-        if (s !== "saclos") presetHasAAM = true; // saclos AAMs are barely usable
-      }
-      if (presetHasAAM) aam = true;
-      // Grade missile quality from weapon names in sum_weapons
+      // Grade missile quality AND guidance class from weapon names in
+      // sum_weapons. aamGuidanceType is unreliable (see note above), so the
+      // name is the single source of truth for both.
       const sw = preset.sum_weapons;
       if (sw && typeof sw === "object") {
         for (const wname of Object.keys(sw)) {
           if (!wname.startsWith("rocketguns_") || wname.includes("countermeasure")) continue;
-          const q = aamNameQuality(wname);
-          if (q > bestQuality) bestQuality = q;
+          const info = aamNameInfo(wname);
+          if (!info) continue; // not a recognized AAM (unguided rocket / AGM / bomb)
+          aam = true;
+          if (info.g === "arh") arh = true;
+          else if (info.g === "sarh") sarh = true;
+          if (info.q > bestQuality) bestQuality = info.q;
         }
       }
     }

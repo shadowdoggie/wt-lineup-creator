@@ -350,7 +350,7 @@
     } else if (slot.category === "attacker" || slot.category === "heli") {
       if (u.atgm) bits.push(atgmBadge(u));
       if (u.ordnanceKg > 0) bits.push(stat("Best bomb + rocket ordnance across any preset (guided bombs weighted double)", `${ico("i-bomb")} ${u.ordnanceKg.toLocaleString()} kg`));
-      if (u.climbRate != null && slot.category === "attacker") bits.push(stat("Rate of climb", `${ico("i-bolt")} ${u.climbRate} m/s`));
+      if (u.climbRate != null && slot.category === "attacker") bits.push(stat("Rate of climb", `${ico("i-bolt")} ${u.climbRate} m/s climb`));
       if (!u.atgm && u.ordnanceKg === 0) bits.push(stat("", "Guns only"));
     }
     return bits.join(" ");
