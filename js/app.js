@@ -311,17 +311,12 @@
           `${ico("i-refresh")} ${u.reloadTime}s${auto ? " auto" : ""}`));
       }
       if (u.crewCount != null) bits.push(stat("Crew count", `${ico("i-users")} ${u.crewCount}`));
-      // Only show pen when it comes from the game's ArmorPower table. Estimates
-      // still feed ranking behind the scenes, but fake-looking mm on the card
-      // is worse than showing velocity alone.
-      if (u.gunVel != null || (u.gunPen != null && u.gunPenSrc === "table")) {
-        const parts = [];
-        if (u.gunVel != null) parts.push(`${u.gunVel} m/s`);
-        if (u.gunPen != null && u.gunPenSrc === "table") parts.push(`${u.gunPen}mm pen`);
-        const title = (u.gunPen != null && u.gunPenSrc === "table")
-          ? `Best equippable AP shell — ArmorPower pen at 1 km from game files (spaded shell)`
-          : `Best equippable AP shell — muzzle velocity${u.gunCal ? ` · ${u.gunCal}mm bore` : ""}`;
-        bits.push(stat(title, `${ico("i-target")} ${parts.join(" · ")}`));
+      // Gun velocity/caliber only on the card — no pen mm (table or estimate).
+      // Pen still influences Sniper/uptier ranking behind the scenes.
+      if (u.gunVel != null) {
+        const cal = u.gunCal ? ` · ${u.gunCal}mm` : "";
+        bits.push(stat(`Best equippable AP shell muzzle velocity${u.gunCal ? ` · ${u.gunCal}mm bore` : ""} (spaded)`,
+          `${ico("i-target")} ${u.gunVel} m/s${cal}`));
       }
     } else if (slot.category === "spaa") {
       if (u.sam) bits.push(stat("Carries surface-to-air missiles", `${ico("i-missile")} SAM`));
