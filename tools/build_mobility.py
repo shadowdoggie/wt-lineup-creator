@@ -72,11 +72,12 @@ GUNSTATS_OUT = os.path.join(os.path.dirname(os.path.abspath(MOBILITY_OUT)), "gun
 SPAA_OUT = os.path.join(os.path.dirname(os.path.abspath(MOBILITY_OUT)), "spaa.json")
 ARMOR_OUT = os.path.join(os.path.dirname(os.path.abspath(MOBILITY_OUT)), "armor.json")
 
-# Kinetic armour-piercing shell family (apbc / apcbc / aphebc / apcr / apds /
-# apfsds). Excludes heat / he / smoke / shrapnel — chemical and filler rounds
-# aren't what a sniping gun is judged on. Anchored to a word start so a
-# bulletType like "napalm_tank" can't match on its embedded "ap".
-AP_RE = re.compile(r"\bap", re.I)
+# Kinetic armour-piercing shell family, incl. semi-AP: bulletTypes are single
+# tokens like "apcbc_tank", "apfsds_long_tank", "sapcbc_tank". Match the ap/sap
+# prefix at the token start so we catch AP and SAP (the KV-2's 152 mm sapcbc is
+# its real anti-tank round) while excluding "shrapnel"/"smoke"/"he"/"heat" and a
+# stray "napalm" — the old bare "ap" substring wrongly matched shrapnel & napalm.
+AP_RE = re.compile(r"^s?ap", re.I)
 
 # Gun caliber embedded in a weapon .blk filename, e.g. "23mm_2A7_user_cannon"
 # or the underscore-decimal "37mm" / "12_7mm". Reading it off the name avoids
@@ -567,69 +568,81 @@ def _stabilized(model):
     return False
 
 
-def _is_ir_nv_key(k):
-    """True if a nightVision sub-block key denotes IR / night-vision optics.
-    'ir' is matched only as a standalone token so 'air', 'mirror', 'third',
-    'direction' etc. don't false-positive a tank into having night vision."""
-    kl = k.lower()
-    if "night" in kl or "infrared" in kl:
-        return True
-    return re.search(r"(?<![a-z])ir(?![a-z])", kl) is not None
+# Device tokens that mark an IR / image-intensifier night-vision optic. Matched
+# per-token (see _key_tokens) so a camelCase key like "driverIr" hits on "ir"
+# while "airFilter"/"mirror"/"viewingDirection" don't false-positive.
+_NV_TOKENS = {"ir", "nv", "nvd", "night", "nightvision", "infrared"}
+
+
+def _key_tokens(k):
+    """Split a datamine key on camelCase and snake_case boundaries into a set of
+    lowercase tokens. "commanderViewThermal" -> {commander, view, thermal};
+    "driverIr" -> {driver, ir}."""
+    parts = re.split(r"[_\s]+|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", k)
+    return {p.lower() for p in parts if p}
+
+
+def _classify_optic_key(k):
+    """(thermal, nv) contribution of a single nightVision sub-block key.
+    A 'thermal' token implies night vision too; an IR/NV token is night vision
+    only."""
+    toks = _key_tokens(k)
+    if "thermal" in toks:
+        return True, True
+    if toks & _NV_TOKENS:
+        return False, True
+    return False, False
 
 
 def _night_vision(model):
     """Returns (thermal, nv): thermal=True if the tank has thermal imaging,
     nv=True if it has any night vision (IR or thermal). WWII tanks have no
-    nightVision block at all. Modern tanks have thermals as a researchable
-    modification (modifications.night_vision_system.effects.nightVision) with
-    gunnerThermal/commanderViewThermal/driverThermal sub-blocks, and a
-    hasNightVision flag on the turret weapon."""
-    # Check the top-level nightVision block (some tanks have it stock)
-    nv_block = model.get("nightVision")
-    if isinstance(nv_block, dict) and nv_block:
-        thermal, nv = False, False
-        for k, v in nv_block.items():
+    nightVision data at all. Signals live in up to three places and a tank often
+    has several at once (e.g. stock driverIr in the top-level `nightVision`
+    block PLUS gunner/commander thermals in the night_vision_system
+    modification), so we OR across ALL of them rather than returning at the first
+    hit — otherwise a stock driver-IR device masks the far more important gunner
+    thermal and the tank is reported as NV-only."""
+    thermal = False
+    nv = False
+
+    def scan(block):
+        nonlocal thermal, nv
+        if not isinstance(block, dict):
+            return
+        for k, v in block.items():
             if not isinstance(v, dict):
                 continue
-            if "thermal" in k.lower():
-                thermal = True
-                nv = True
-            elif _is_ir_nv_key(k):
-                nv = True
-        if thermal or nv:
-            return thermal, nv
-    # Check the night_vision_system modification (the usual path for modern tanks)
-    mods = model.get("modifications", {})
+            t, n = _classify_optic_key(k)
+            thermal = thermal or t
+            nv = nv or n
+
+    # 1) Top-level nightVision block (stock devices — often just driver IR).
+    scan(model.get("nightVision"))
+    # 2) Every modification's effects.nightVision. Thermals are researchable and
+    #    live under varying mod names — "night_vision_system" (Leo 2A5, Abrams)
+    #    or an upgrade like "night_vision_system_upgrade_nv_to_thermal" (T-80U) —
+    #    so scan them all rather than one hard-coded key.
+    mods = model.get("modifications")
     if isinstance(mods, dict):
-        nvs = mods.get("night_vision_system", {})
-        if isinstance(nvs, dict):
-            effects = nvs.get("effects", {})
-            if isinstance(effects, dict):
-                nv2 = effects.get("nightVision", {})
-                if isinstance(nv2, dict):
-                    thermal = False
-                    nv = False
-                    for k, v in nv2.items():
-                        if not isinstance(v, dict):
-                            continue
-                        if "thermal" in k.lower():
-                            thermal = True
-                            nv = True
-                        elif _is_ir_nv_key(k):
-                            nv = True
-                    if thermal or nv:
-                        return thermal, nv
-    # Check hasNightVision flag on turret weapons (least specific signal)
-    common = model.get("commonWeapons") or {}
-    weps = common.get("Weapon") if isinstance(common, dict) else common
-    weps = weps if isinstance(weps, list) else [weps]
-    for w in weps:
-        if not isinstance(w, dict):
-            continue
-        turret = w.get("turret", {})
-        if isinstance(turret, dict) and turret.get("hasNightVision"):
-            return False, True  # has NV but we don't know if it's thermal
-    return False, False
+        for mod in mods.values():
+            if isinstance(mod, dict):
+                effects = mod.get("effects")
+                if isinstance(effects, dict):
+                    scan(effects.get("nightVision"))
+    # 3) hasNightVision flag on turret weapons — least specific (NV, not thermal).
+    if not (thermal or nv):
+        common = model.get("commonWeapons") or {}
+        weps = common.get("Weapon") if isinstance(common, dict) else common
+        weps = weps if isinstance(weps, list) else [weps]
+        for w in weps:
+            if not isinstance(w, dict):
+                continue
+            turret = w.get("turret", {})
+            if isinstance(turret, dict) and turret.get("hasNightVision"):
+                nv = True
+                break
+    return thermal, nv
 
 
 def _reverse_ratio(model):

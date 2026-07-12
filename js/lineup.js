@@ -122,11 +122,14 @@ const LINEUP = (() => {
     };
     // BR closeness still matters (avoid heavy downtiers) but the playstyle
     // stat is now a co-equal driver, so Speed really favors high hp/ton etc.
-    // A small stabilization bonus nudges stabilized tanks up — they can shoot
-    // on the move, a major advantage the raw stats don't otherwise capture.
+    // Small capability nudges the raw stats don't otherwise capture: a
+    // stabilizer (can shoot on the move) and optics — thermals (spot through
+    // bushes/smoke and at night, a big top-tier edge) weigh more than plain
+    // night vision.
     const groundScore = u =>
       brScore(u.br[o.mode], o.targetBR) * 1.1 + (ps.classW[u.cls] || 0.5) * 1.4 +
-      ps.stat(u, p) * 1.4 + (u.stabilized ? 0.15 : 0);
+      ps.stat(u, p) * 1.4 + (u.stabilized ? 0.15 : 0) +
+      (u.thermal ? 0.12 : u.nv ? 0.05 : 0);
 
     // Ground-attack firepower = real ordnance weight with a big premium for
     // ATGMs (guided tank-killers punch far above their mass). Blended here so
