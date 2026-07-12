@@ -142,7 +142,10 @@ const LINEUP = (() => {
     const velPctRaw = percentiler(mains, u => u.gunVel);
     const calPctRaw = percentiler(mains, u => u.gunCal);
     const penPctRaw = percentiler(mains, u => u.gunPen);
-    const reloadPctRaw = percentiler(mains, u => u.reloadTime ? -u.reloadTime : null);
+    // Reload: don't mix autoloaders (~≤6s) with manual loaders in one percentile.
+    // Autoloaders get a high fixed band; manuals are ranked among themselves.
+    const manualReloadPool = mains.filter(u => u.reloadTime != null && u.reloadTime > 6);
+    const manualReloadPct = percentiler(manualReloadPool, u => -u.reloadTime);
     const revPctRaw = percentiler(mains, u => u.revRatio > 0 ? u.revRatio : null);
     const turretPctRaw = percentiler(mains, u => u.turretSpeed ?? null);
     const crewPctRaw = percentiler(mains, u => u.crewCount ?? null);
@@ -155,7 +158,11 @@ const LINEUP = (() => {
       velPct: u => velPctRaw(u) ?? 0.35,
       calPct: u => calPctRaw(u) ?? 0.35,
       penPct: u => penPctRaw(u) ?? 0.35,
-      reloadPct: u => reloadPctRaw(u) ?? 0.5,
+      reloadPct: u => {
+        if (u.reloadTime == null) return 0.5;
+        if (u.reloadTime <= 6) return 0.88 + Math.min(0.12, (6 - u.reloadTime) / 50);
+        return manualReloadPct(u) ?? 0.5;
+      },
       revPct: u => revPctRaw(u) ?? 0.5,
       turretPct: u => turretPctRaw(u) ?? 0.5,
       crewPct: u => crewPctRaw(u) ?? 0.5,
@@ -185,11 +192,31 @@ const LINEUP = (() => {
       return Math.max(0, Math.min(1, ratio * 0.65));
     };
 
-    // Tech-tree preference: when scores are otherwise close, prefer vehicles
-    // the player is more likely to own. Small nudge — never overrides a clearly
-    // better premium if premium is enabled.
-    const ownershipNudge = u =>
-      (!u.premium && !u.squadron && !u.gift) ? 0.12 : 0;
+    // Ownership: ownedIds is a Set of vehicle ids the player marked as owned.
+    //   ownedMode "prefer" — big bonus for owned (default when any are marked)
+    //   ownedMode "only"   — filter to owned when the role has any owned candidates
+    //   ownedMode "ignore" — no ownership influence
+    // Tech-tree vehicles still get a tiny nudge when ownership is ignore/empty.
+    const owned = o.ownedIds instanceof Set ? o.ownedIds
+      : new Set(Array.isArray(o.ownedIds) ? o.ownedIds : []);
+    const ownedMode = o.ownedMode || "prefer";
+    const ownershipNudge = u => {
+      if (ownedMode === "ignore") {
+        return (!u.premium && !u.squadron && !u.gift) ? 0.12 : 0;
+      }
+      if (owned.has(u.id)) return 0.55;
+      // Soft penalty for unowned specials when prefer is on; tech tree mild bonus.
+      if (ownedMode === "prefer" && owned.size) {
+        if (u.premium || u.squadron || u.gift) return -0.08;
+        return 0.08;
+      }
+      return (!u.premium && !u.squadron && !u.gift) ? 0.12 : 0;
+    };
+    const filterOwned = arr => {
+      if (ownedMode !== "only" || !owned.size) return arr;
+      const kept = arr.filter(u => owned.has(u.id));
+      return kept.length ? kept : arr; // never empty a role if nothing owned there
+    };
 
     // BR closeness is the dominant term (×2.0) so the generator optimizes for
     // the same thing the health panel measures. Class fit + stats still matter
@@ -217,29 +244,39 @@ const LINEUP = (() => {
     // Fighter and attacker scores are intentionally normalized to ~0..1 so the
     // balanced single-slot tiebreak compares like with like (raw attackerScore
     // used to sum higher and almost always win).
+    // Fighters: dogfight stats + AAM presence + BVR (ARH) + countermeasures.
     const fighterRaw = u =>
       brScore(u.br[o.mode], o.targetBR) * 1.2 +
-      turnQuality(u) * 0.9 +
-      (climbPctRaw(u) ?? 0.5) * 0.7 +
-      (speedPctRaw(u) ?? 0.5) * 0.4 +
-      (u.cls === "fighter" ? 0.8 : 0) +
+      turnQuality(u) * 0.75 +
+      (climbPctRaw(u) ?? 0.5) * 0.55 +
+      (speedPctRaw(u) ?? 0.5) * 0.35 +
+      (u.cls === "fighter" ? 0.7 : 0) +
+      (u.aam ? 0.45 : 0) +
+      (u.arh ? 0.35 : 0) +
+      (u.cm ? 0.2 : 0) +
       ownershipNudge(u);
-    // Max theoretical ≈ 1.2+0.9+0.7+0.4+0.8+0.12 = 4.12
-    const FIGHTER_NORM = 4.12;
+    // Max theoretical ≈ 1.2+0.75+0.55+0.35+0.7+0.45+0.35+0.2+0.55 ≈ 5.1
+    const FIGHTER_NORM = 5.1;
     const fighterScore = u => fighterRaw(u) / FIGHTER_NORM;
 
+    // CAS: payload + ATGM, plus enough flight stats to prefer a jet that can
+    // actually deliver over a lumbering bomb truck with the same tonnage.
     const attackerRaw = u => {
       const isBomber = u.cls === "bomber";
       const pay = isBomber ? Math.min(payPctRaw(u) ?? 0, 0.3) : (payPctRaw(u) ?? 0);
       return brScore(u.br[o.mode], o.targetBR) * 1.2 +
-        pay * 1.2 +
-        (u.cls === "attacker" ? 0.6 : 0) +
-        (u.atgm ? 0.35 : 0) +
+        pay * 1.0 +
+        (climbPctRaw(u) ?? 0.4) * 0.35 +
+        (speedPctRaw(u) ?? 0.4) * 0.3 +
+        turnQuality(u) * 0.2 +
+        (u.cls === "attacker" ? 0.55 : 0) +
+        (u.atgm ? 0.4 : 0) +
+        (u.cm ? 0.1 : 0) +
         ownershipNudge(u) -
         (!o.levelBombersCAS && isBomber ? 1.0 : 0);
     };
-    // Max theoretical ≈ 1.2+1.2+0.6+0.35+0.12 = 3.47 (bomber penalty aside)
-    const ATTACKER_NORM = 3.47;
+    // Max theoretical ≈ 1.2+1.0+0.35+0.3+0.2+0.55+0.4+0.1+0.55 ≈ 4.65
+    const ATTACKER_NORM = 4.65;
     const attackerScore = u => attackerRaw(u) / ATTACKER_NORM;
 
     // Helicopters: BR closeness + ATGM standoff range dominate. Ordnance kg used
@@ -280,12 +317,15 @@ const LINEUP = (() => {
     }
 
     const pools = {
-      ground: rankBy(mains, groundScore),
-      spaa: rankBy(spaas, spaaScore),
-      fighter: rankBy(fighterPool, fighterScore),
-      attacker: rankBy(casPlanes, attackerScore),
-      heli: rankBy(helis, heliScore),
+      ground: rankBy(filterOwned(mains), groundScore),
+      spaa: rankBy(filterOwned(spaas), spaaScore),
+      fighter: rankBy(filterOwned(fighterPool), fighterScore),
+      attacker: rankBy(filterOwned(casPlanes), attackerScore),
+      heli: rankBy(filterOwned(helis), heliScore),
     };
+    if (ownedMode === "only" && owned.size) {
+      warnings.push("Owned-only mode: ranking vehicles you've marked as owned (roles with none fall back to all).");
+    }
 
     // --- slot allocation ---
     // Plane / SPAA / heli counts: user can override the auto heuristics.
@@ -295,6 +335,8 @@ const LINEUP = (() => {
       return Number.isFinite(n) ? Math.max(0, n) : auto;
     };
 
+    // Air role is the master switch: "none" means no aircraft (airCount ignored).
+    // airCount is Auto/1/2 only — no separate "0" path that fights the role.
     const wantPlanes = o.planeRole && o.planeRole !== "none" && planes.length;
     const autoAir = wantPlanes ? (o.slots >= 6 ? 2 : 1) : 0;
     const airTotal = wantPlanes ? parseCount(o.airCount, autoAir) : 0;
@@ -336,19 +378,24 @@ const LINEUP = (() => {
     }
 
     // Intent flags for the health panel (so "no SPAA" isn't a warning when chosen).
-    const wantSPAA = spaaMode !== "off" && spaaMode !== "0";
-    const wantHeli = heliMode !== "off" && heliMode !== "0";
-    const wantAir = !!(o.planeRole && o.planeRole !== "none" &&
-      !(o.airCount === "0" || o.airCount === 0));
+    // Auto SPAA only "wants" SPAA when slots can actually hold it (≥3).
+    const wantSPAA = spaaMode === "auto"
+      ? (o.slots >= 3)
+      : (spaaMode !== "off" && spaaMode !== "0");
+    const wantHeli = heliMode === "auto"
+      ? (o.slots >= 5)
+      : (heliMode !== "off" && heliMode !== "0");
+    const wantAir = !!(o.planeRole && o.planeRole !== "none");
 
     // Always reserve at least two slots (or all, for tiny lineups) for mains.
     const minGround = Math.min(2, o.slots);
     const support = () => fighterN + attackerN + spaaN + heliN;
+    const stripped = [];
     while (o.slots - support() < minGround) {
-      if (heliN) heliN--;
-      else if (attackerN) attackerN--;
-      else if (fighterN) fighterN--;
-      else if (spaaN) spaaN--;
+      if (heliN) { heliN--; stripped.push("helicopter"); }
+      else if (attackerN) { attackerN--; stripped.push("CAS"); }
+      else if (fighterN) { fighterN--; stripped.push("fighter"); }
+      else if (spaaN) { spaaN--; stripped.push("SPAA"); }
       else break;
     }
     const groundCount = o.slots - support();
@@ -421,14 +468,21 @@ const LINEUP = (() => {
     if (wantSPAA && !spaas.length) {
       warnings.push("No SPAA available in this BR bracket.");
     }
-    if (wantSPAA && spaas.length && o.slots < 3 && spaaMode === "auto") {
+    if (spaaMode === "auto" && spaas.length && o.slots < 3) {
       warnings.push("SPAA skipped — needs at least 3 crew slots.");
     }
     if (wantHeli && !helis.length) {
       warnings.push("No helicopters available in this BR bracket.");
     }
-    if (wantHeli && helis.length && o.slots < 5 && heliMode === "auto") {
+    if (heliMode === "auto" && helis.length && o.slots < 5) {
       warnings.push("Helicopter skipped — needs at least 5 crew slots.");
+    }
+    if (stripped.length) {
+      const uniq = [...new Set(stripped)];
+      warnings.push(
+        `Dropped ${uniq.join(", ")} to keep at least ${minGround} ground slot(s) ` +
+        `(crew slots too few for the full support request).`
+      );
     }
 
     const health = assess(slots, { ...o, wantSPAA, wantHeli, wantAir });
@@ -444,10 +498,10 @@ const LINEUP = (() => {
     const spaaMode = o.spaaCount == null || o.spaaCount === "" ? "auto" : String(o.spaaCount);
     const wantSPAA = o.wantSPAA !== undefined
       ? o.wantSPAA
-      : (spaaMode !== "off" && spaaMode !== "0");
+      : (spaaMode === "auto" ? (o.slots == null || o.slots >= 3) : (spaaMode !== "off" && spaaMode !== "0"));
     const wantAir = o.wantAir !== undefined
       ? o.wantAir
-      : !!(o.planeRole && o.planeRole !== "none" && o.airCount !== "0" && o.airCount !== 0);
+      : !!(o.planeRole && o.planeRole !== "none");
 
     const mode = o.mode;
     const brs = slots.map(s => s.unit.br[mode]).filter(b => b != null);

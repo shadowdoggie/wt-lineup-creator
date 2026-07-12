@@ -29,9 +29,9 @@ const WT_DATA = (() => {
   const GUNSTATS_URL = "data/gunstats.json";
   const SPAA_URL = "data/spaa.json";
   const ARMOR_URL = "data/armor.json";
-  // Fallback re-download interval, used only when the commit check fails
-  // (offline, or GitHub API rate limit of 60 req/h per IP exhausted).
-  const MAX_AGE_MS = 24 * 3600 * 1000;
+  // Fallback re-download interval when the commit check fails (offline / API
+  // rate limit). Generous so a rate-limited first paint still serves cache.
+  const MAX_AGE_MS = 7 * 24 * 3600 * 1000;
   // Roughly how many crewable vehicles we expect to parse. The game files only
   // ever grow, so parsing far fewer than this means the format shifted under us.
   const EXPECT_MIN_UNITS = 1500;
@@ -48,8 +48,8 @@ const WT_DATA = (() => {
     "researchPoints armorHull armorTurret effArmor stabilized thermal nv revRatio " +
     "hpPerTon gunVel gunCal gunPen turnTime maxSpeed climbRate " +
     "crewCount reloadTime turretSpeed " +
-    "ordnanceKg atgm atgmRange sam radar aaCal " +
-    "fmt:name-markers-stripped;air:same-preset-firepower";
+    "ordnanceKg atgm atgmRange aam arh cm sam radar aaCal " +
+    "fmt:name-markers-stripped;air:same-preset-firepower+aam";
   function hash32(s) {
     let h = 2166136261;
     for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
@@ -126,6 +126,28 @@ const WT_DATA = (() => {
       }
     }
     return { ordnanceKg: best.ordnanceKg, atgm: best.atgm, atgmRange: best.atgmRange };
+  }
+
+  // Air-to-air / survivability flags from the same weapon presets (fighters):
+  //   aamGuidanceType — IR/basic ("default"), ARH ("arh"), SACLOS, etc.
+  //   hasCountermeasures — flares/chaff available on a loadout
+  // These are presence flags across any preset (you can equip AAMs or CMs even
+  // if the heaviest bomb load doesn't carry them).
+  function airCombat(w) {
+    let aam = false, arh = false, cm = false;
+    for (const preset of Object.values(w.weapons || {})) {
+      if (preset.hasCountermeasures) cm = true;
+      const g = preset.aamGuidanceType;
+      if (g == null) continue;
+      aam = true;
+      const types = Array.isArray(g) ? g : [g];
+      for (const t of types) {
+        const s = String(t).toLowerCase();
+        // Active-radar and any future SARH-style tags count as beyond-visual-range.
+        if (s === "arh" || s === "sarh" || s.includes("radar")) arh = true;
+      }
+    }
+    return { aam, arh, cm };
   }
 
   function classify(type, tags) {
@@ -218,6 +240,7 @@ const WT_DATA = (() => {
       // Both aircraft and helicopters carry ground-attack ordnance (a heli's
       // whole reason for existing is its ATGMs), so score firepower for both.
       const fire = air ? airFirepower(w) : null;
+      const combat = air ? airCombat(w) : null;
       units.push({
         id,
         name: names[id] || prettifyId(id),
@@ -243,29 +266,31 @@ const WT_DATA = (() => {
         gift: !!(w.gift || w.event || w.showOnlyWhenBought),
         armorHull: Array.isArray(shop.armorThicknessHull) ? shop.armorThicknessHull[0] : null,
         armorTurret: Array.isArray(shop.armorThicknessTurret) ? shop.armorThicknessTurret[0] : null,
-        effArmor: 0, // filled from armor.json after load — KE-effective rating
-        stabilized: false, // filled from armor.json — gun stabilizer present
-        thermal: false, // filled from armor.json — thermal imaging
-        nv: false, // filled from armor.json — any night vision
-        revRatio: 0, // filled from armor.json — reverse speed / forward speed
-        hpPerTon: null, // filled from mobility.json after load
-        gunVel: null,   // filled from gunstats.json after load (best AP shell m/s)
-        gunCal: null,   // bore caliber (mm)
-        gunPen: null,   // estimated penetration at 1000m (mm)
-        sam: false,     // SPAA-only, filled from spaa.json: carries surface-to-air missiles
-        radar: false,   // SPAA-only: has a tracking radar
-        aaCal: null,    // SPAA-only: main gun caliber (mm)
+        // Ranking score from armor.json (ERA/composite folded in) — not exact pen.
+        effArmor: 0,
+        stabilized: false,
+        thermal: false,
+        nv: false,
+        revRatio: 0,
+        hpPerTon: null,
+        gunVel: null,
+        gunCal: null,
+        gunPen: null,
+        sam: false,
+        radar: false,
+        aaCal: null,
         crewCount: typeof w.crewTotalCount === "number" ? w.crewTotalCount : null,
         reloadTime: typeof w.reloadTime_cannon === "number" ? w.reloadTime_cannon : null,
         turretSpeed: Array.isArray(w.turretSpeed) ? w.turretSpeed[0] : null,
-        // Fighters: lower turnTime = better dogfighter. Air/heli: real
-        // ground-ordnance weight (kg) + whether it can bring ATGMs.
         turnTime: air && typeof shop.turnTime === "number" ? shop.turnTime : null,
         maxSpeed: air && typeof shop.maxSpeed === "number" ? shop.maxSpeed : null,
         climbRate: air && typeof shop.climbSpeed === "number" ? shop.climbSpeed : null,
         ordnanceKg: fire ? fire.ordnanceKg : 0,
         atgm: fire ? fire.atgm : false,
         atgmRange: fire ? fire.atgmRange : 0,
+        aam: combat ? combat.aam : false,   // any air-to-air missiles
+        arh: combat ? combat.arh : false,   // active-radar / BVR-class AAMs
+        cm: combat ? combat.cm : false,     // countermeasures (flares/chaff)
       });
     }
     return units;
@@ -282,11 +307,26 @@ const WT_DATA = (() => {
     }
   }
 
+  // Returns true if the write landed. On quota failure we drop older wtlc_*
+  // caches and retry once so a full garage dump doesn't permanently disable caching.
   function writeCache(cache) {
+    const payload = JSON.stringify(cache);
     try {
-      localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
+      localStorage.setItem(CACHE_KEY, payload);
+      return true;
     } catch {
-      // Cache is an optimization only; a full quota is fine to ignore.
+      try {
+        const doomed = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && k.startsWith("wtlc_") && k !== CACHE_KEY) doomed.push(k);
+        }
+        for (const k of doomed) localStorage.removeItem(k);
+        localStorage.setItem(CACHE_KEY, payload);
+        return true;
+      } catch {
+        return false;
+      }
     }
   }
 
@@ -456,11 +496,25 @@ const WT_DATA = (() => {
         gameDataDate: head?.date || null,
         units: buildUnits(wpcost, unittags, parseNames(namesCsv), collectShopIds(shop)),
       };
-      writeCache(fresh);
-      return finalize({ ...fresh, fromCache: false, upToDate: !!head });
+      const cached = writeCache(fresh);
+      const out = await finalize({ ...fresh, fromCache: false, upToDate: !!head });
+      if (!cached) {
+        out.dataWarnings = [
+          ...(out.dataWarnings || []),
+          "Browser storage is full — vehicle data won't be cached between visits (slower reloads).",
+        ];
+      }
+      return out;
     } catch (err) {
       // Offline / rate-limited: fall back to stale cache rather than a dead app.
-      if (cache) return finalize({ ...cache, fromCache: true, stale: true });
+      if (cache) {
+        const out = await finalize({ ...cache, fromCache: true, stale: true });
+        out.dataWarnings = [
+          ...(out.dataWarnings || []),
+          "Couldn't reach the datamine mirror — using cached vehicle data.",
+        ];
+        return out;
+      }
       throw err;
     }
   }

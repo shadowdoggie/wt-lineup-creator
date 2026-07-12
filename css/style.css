@@ -468,6 +468,35 @@ input:focus {
 }
 .pool-note.spaded-note .ico { color: var(--gold); margin-top: 2px; flex-shrink: 0; }
 
+.slot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: auto;
+}
+.own-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-2);
+  background: var(--inset);
+  color: var(--text-dim);
+  font-family: var(--font-body);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.own-btn:hover { border-color: var(--gold-dim); color: var(--text); }
+.own-btn.is-owned {
+  border-color: var(--gold-2);
+  background: rgba(233, 182, 74, 0.12);
+  color: var(--gold);
+}
+.own-btn .ico { color: inherit; }
+
 /* Generate button — sticky inside the (possibly scrolling) form panel so the
    CTA is always reachable, even on short screens. */
 
@@ -747,8 +776,8 @@ input:focus {
   align-items: center;
   justify-content: center;
   gap: 7px;
-  margin-top: auto;
-  width: 100%;
+  flex: 1;
+  min-width: 7rem;
   padding: 7px 8px;
   background: var(--inset);
   border: 1px solid var(--line-2);

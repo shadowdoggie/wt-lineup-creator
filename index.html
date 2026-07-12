@@ -108,13 +108,14 @@
               <option value="both">Any bomber — dive or level</option>
             </select>
           </div>
-          <label for="airCount" class="cas-label">Air slots</label>
-          <select id="airCount" title="How many aircraft slots to reserve">
-            <option value="auto" selected>Auto — 1 under 6 slots, 2 at 6+</option>
-            <option value="0">0 — no aircraft</option>
-            <option value="1">1 aircraft</option>
-            <option value="2">2 aircraft</option>
-          </select>
+          <div id="airCountWrap">
+            <label for="airCount" class="cas-label">Air slots</label>
+            <select id="airCount" title="How many aircraft slots to reserve">
+              <option value="auto" selected>Auto — 1 under 6 slots, 2 at 6+</option>
+              <option value="1">1 aircraft</option>
+              <option value="2">2 aircraft</option>
+            </select>
+          </div>
         </div>
       </div>
 
@@ -145,7 +146,13 @@
             <label class="check"><input type="checkbox" id="incSquadron"><span class="check-label">Squadron</span></label>
             <label class="check"><input type="checkbox" id="incGift"><span class="check-label">Event / gift</span></label>
           </div>
-          <p class="hint field-hint-bottom">Tech tree vehicles are always included. Premiums with event flags still appear when Premium is on. Stats assume spaded vehicles.</p>
+          <label for="ownedMode" class="cas-label" style="margin-top:10px">My garage</label>
+          <select id="ownedMode" title="How to use vehicles you've marked as owned">
+            <option value="prefer" selected>Prefer vehicles I own</option>
+            <option value="only">Only vehicles I own</option>
+            <option value="ignore">Ignore ownership marks</option>
+          </select>
+          <p class="hint field-hint-bottom">Tech tree always included. Mark owned vehicles with the star on each card. Stats assume spaded vehicles.</p>
         </div>
       </div>
 

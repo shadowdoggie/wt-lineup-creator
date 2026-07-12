@@ -31,7 +31,8 @@
 
   // Form state is remembered across page reloads (see save/loadPrefs). Bump the
   // key if the set of saved fields changes in an incompatible way.
-  const PREFS_KEY = "wtlc_prefs_v4";
+  const PREFS_KEY = "wtlc_prefs_v5";
+  const OWNED_KEY = "wtlc_owned_v1";
 
   /* ---------- data loading ---------- */
 
@@ -144,6 +145,18 @@
     }
   }
 
+  function loadOwned() {
+    try {
+      const raw = localStorage.getItem(OWNED_KEY);
+      const arr = raw ? JSON.parse(raw) : [];
+      return new Set(Array.isArray(arr) ? arr : []);
+    } catch { return new Set(); }
+  }
+  function saveOwned(set) {
+    try { localStorage.setItem(OWNED_KEY, JSON.stringify([...set])); } catch { /* quota */ }
+  }
+  let ownedIds = loadOwned();
+
   function currentOptions() {
     // The CAS-restriction dropdown maps to the two booleans lineup.js consumes:
     // "both" = level OR dive bombers only, "any" = no restriction.
@@ -163,7 +176,16 @@
       incSquadron: $("incSquadron").checked,
       incGift: $("incGift").checked,
       playstyle: document.querySelector('input[name="playstyle"]:checked')?.value || "balanced",
+      ownedMode: $("ownedMode")?.value || "prefer",
+      ownedIds,
     };
+  }
+
+  function tryGenerate() {
+    if (!state.units.length) return;
+    const o = currentOptions();
+    if (Number.isNaN(o.targetBR)) return;
+    renderResult(LINEUP.generate(state.units, o), o);
   }
 
   /* ---------- preference persistence ---------- */
@@ -173,10 +195,8 @@
   function updateBomberVis() {
     const role = $("planeRole").value;
     $("bombersOnlyWrap").hidden = !(role === "attacker" || role === "balanced");
-    const airCount = $("airCount");
-    if (airCount) airCount.hidden = role === "none";
-    const airLbl = airCount?.previousElementSibling;
-    if (airLbl && airLbl.htmlFor === "airCount") airLbl.hidden = role === "none";
+    const wrap = $("airCountWrap");
+    if (wrap) wrap.hidden = role === "none";
   }
 
   // Persist the whole form to localStorage so a page reload keeps your setup
@@ -192,6 +212,7 @@
       spaaCount: $("spaaCount")?.value || "auto",
       heliCount: $("heliCount")?.value || "0",
       casType: $("casType").value,
+      ownedMode: $("ownedMode")?.value || "prefer",
       incPremium: $("incPremium").checked,
       incSquadron: $("incSquadron").checked,
       incGift: $("incGift").checked,
@@ -220,10 +241,14 @@
     }
     if (p.slots != null && p.slots !== "") $("slots").value = p.slots;
     if (p.planeRole) $("planeRole").value = p.planeRole;
-    if (p.airCount && $("airCount")) $("airCount").value = p.airCount;
-    // Unified SPAA/heli selects. Migrate old checkbox prefs:
-    //   incSPAA false → "0", true + no count → "auto"
-    //   incHelis false → "0", true → "auto"
+    // Migrate old airCount "0" → planeRole none.
+    if (p.airCount === "0" || p.airCount === 0) {
+      if ($("planeRole")) $("planeRole").value = "none";
+      if ($("airCount")) $("airCount").value = "auto";
+    } else if (p.airCount && $("airCount") && p.airCount !== "0") {
+      $("airCount").value = String(p.airCount);
+    }
+    // Unified SPAA/heli selects. Migrate old checkbox prefs.
     if (p.spaaCount != null && $("spaaCount")) $("spaaCount").value = String(p.spaaCount);
     else if (typeof p.incSPAA === "boolean" && $("spaaCount")) {
       $("spaaCount").value = p.incSPAA ? "auto" : "0";
@@ -232,6 +257,7 @@
     else if (typeof p.incHelis === "boolean" && $("heliCount")) {
       $("heliCount").value = p.incHelis ? "auto" : "0";
     }
+    if (p.ownedMode && $("ownedMode")) $("ownedMode").value = p.ownedMode;
     // Prefer the new dropdown value; migrate old level/dive checkbox prefs so a
     // returning user keeps their bomber-CAS choice.
     if (p.casType) $("casType").value = p.casType;
@@ -294,18 +320,22 @@
         // — show the effective rating so the user understands why a T-90M
         // (steel ~80mm) ranks above a Maus (steel ~232mm) for the Armor playstyle.
         const title = u.effArmor > Math.max(u.armorHull ?? 0, u.armorTurret ?? 0)
-          ? `Frontal armor (mm) · effective ${u.effArmor} incl. ERA/composite (spaded — unlockable packs counted)`
+          ? `Frontal steel (mm). Ranking armor ~${u.effArmor} (approx. incl. ERA/composite — not exact in-game pen; spaded packs counted)`
           : "Frontal armor (mm)";
         bits.push(stat(title, `${ico("i-shield")} ${armor.join(" / ")}`));
       }
       if (u.stabilized) bits.push(stat("Gun stabilizer — can shoot on the move", `${ico("i-bolt")} Stab`));
       if (u.thermal) bits.push(stat("Thermal imaging (assumes researchable optic upgrades)", `${ico("i-scope")} Thermal`));
       else if (u.nv) bits.push(stat("Night vision", `${ico("i-scope")} NV`));
-      if (u.reloadTime != null) bits.push(stat("Stock reload time (not spaded crew)", `${ico("i-refresh")} ${u.reloadTime}s`));
+      if (u.reloadTime != null) {
+        const auto = u.reloadTime <= 6;
+        bits.push(stat(auto ? "Stock autoloader cycle (not crew-trained)" : "Stock manual reload (not crew-trained)",
+          `${ico("i-refresh")} ${u.reloadTime}s${auto ? " auto" : ""}`));
+      }
       if (u.crewCount != null) bits.push(stat("Crew count", `${ico("i-users")} ${u.crewCount}`));
       if (u.gunVel != null) {
         const penStr = u.gunPen != null ? ` · ${u.gunPen}mm pen` : "";
-        bits.push(stat(`Best researchable AP shell (spaded)${u.gunCal ? ` · ${u.gunCal}mm bore` : ""}${penStr ? ` · ${u.gunPen}mm pen at 1km` : ""}`, `${ico("i-target")} ${u.gunVel} m/s${penStr}`));
+        bits.push(stat(`Best researchable AP shell (spaded)${u.gunCal ? ` · ${u.gunCal}mm bore` : ""}${penStr ? ` · ~${u.gunPen}mm pen at 1km` : ""}`, `${ico("i-target")} ${u.gunVel} m/s${penStr}`));
       }
     } else if (slot.category === "spaa") {
       if (u.sam) bits.push(stat("Carries surface-to-air missiles", `${ico("i-missile")} SAM`));
@@ -314,24 +344,40 @@
     } else if (slot.category === "fighter") {
       if (u.turnTime != null) bits.push(stat("Sustained turn time", `${ico("i-turn")} ${u.turnTime}s turn`));
       if (u.climbRate != null) bits.push(stat("Rate of climb", `${ico("i-bolt")} ${u.climbRate} m/s climb`));
+      if (u.maxSpeed != null) bits.push(stat("Max speed (shop)", `${ico("i-gauge")} ${u.maxSpeed}`));
+      if (u.aam) bits.push(stat(u.arh ? "Air-to-air missiles incl. radar-homing (BVR-class)" : "Air-to-air missiles",
+        `${ico("i-missile")} ${u.arh ? "AAM/BVR" : "AAM"}`));
+      if (u.cm) bits.push(stat("Countermeasures (flares/chaff)", `${ico("i-radar")} CM`));
     } else if (slot.category === "attacker" || slot.category === "heli") {
       if (u.atgm) bits.push(atgmBadge(u));
-      if (u.ordnanceKg > 0) bits.push(stat("Bomb + rocket ordnance (guided bombs weighted double)", `${ico("i-bomb")} ${u.ordnanceKg.toLocaleString()} kg`));
+      if (u.ordnanceKg > 0) bits.push(stat("Best same-preset bomb + rocket ordnance (guided bombs weighted double)", `${ico("i-bomb")} ${u.ordnanceKg.toLocaleString()} kg`));
+      if (u.climbRate != null && slot.category === "attacker") bits.push(stat("Rate of climb", `${ico("i-bolt")} ${u.climbRate} m/s`));
       if (!u.atgm && u.ordnanceKg === 0) bits.push(stat("", "Guns only"));
     }
     return bits.join(" ");
   }
 
+  function needsSpadedNote(u) {
+    // Only show where unlockables actually change the score: modern optics,
+    // ERA beyond steel, top AP shells, or air loadouts.
+    if (u.type === "aircraft" || u.type === "helicopter") return true;
+    if (u.type !== "tank") return false;
+    if (u.thermal) return true;
+    if (u.gunPen != null && u.rank >= 4) return true;
+    const raw = Math.max(u.armorHull ?? 0, u.armorTurret ?? 0);
+    if (u.effArmor > raw && u.effArmor > 0) return true;
+    return false;
+  }
+
   function slotCard(slot, i, mode, result) {
     const meta = badgeFor(slot);
     const pool = result.pools[slot.category] || [];
-    const alts = pool.filter(u => !result.used.has(u.id)).length; // others not in the lineup
-    // Spaded chip: tanks (armor/shells/optics) and air (best loadout). Central
-    // copy lives in LINEUP.SPADED so future data changes update one string.
+    const alts = pool.filter(u => !result.used.has(u.id)).length;
     const sp = LINEUP.SPADED || {};
-    const spadedChip = (slot.unit.type === "tank" || slot.unit.type === "aircraft" || slot.unit.type === "helicopter")
+    const spadedChip = needsSpadedNote(slot.unit)
       ? `<span class="spaded-chip" title="${esc(sp.title || "")}">${ico("i-info")} ${esc(sp.short || "Spaded")}</span>`
       : "";
+    const isOwned = ownedIds.has(slot.unit.id);
     return `
       <div class="slot-card" style="--cls-color:${meta.color}">
         <div class="slot-head">
@@ -340,10 +386,16 @@
         </div>
         <div class="veh-name">${esc(slot.unit.name)} ${srcBadges(slot.unit)} ${spadedChip}</div>
         <div class="veh-meta">${metaBits(slot, mode)}</div>
-        <button class="swap-btn" data-slot="${i}" ${alts ? "" : "disabled"}
-          title="Swap for the next-best ${meta.label.toLowerCase()} (respects your playstyle)">
-          ${ico("i-swap")} Swap${alts ? ` <span class="alt-count">${alts} more</span>` : ` <span class="alt-count">none left</span>`}
-        </button>
+        <div class="slot-actions">
+          <button type="button" class="own-btn${isOwned ? " is-owned" : ""}" data-own="${esc(slot.unit.id)}"
+            title="${isOwned ? "Marked as owned — click to unmark" : "Mark as owned (saved in this browser)"}">
+            ${ico("i-star")} ${isOwned ? "Owned" : "I own this"}
+          </button>
+          <button type="button" class="swap-btn" data-slot="${i}" ${alts ? "" : "disabled"}
+            title="Swap for the next-best ${meta.label.toLowerCase()} (respects your playstyle)">
+            ${ico("i-swap")} Swap${alts ? ` <span class="alt-count">${alts} more</span>` : ` <span class="alt-count">none left</span>`}
+          </button>
+        </div>
       </div>`;
   }
 
@@ -388,8 +440,8 @@
       <div class="lineup-grid">${result.slots.map((s, i) => slotCard(s, i, o.mode, result)).join("")}</div>
       <p class="pool-note spaded-note" title="${esc(LINEUP.SPADED?.title || "")}">${ico("i-info")} ${esc(LINEUP.SPADED?.note || "")}</p>
       <p class="pool-note">${result.poolSize} vehicles matched your filters in this bracket.
-        Use <strong>Swap</strong> on any slot to cycle to the next-best pick of that role — handy for
-        swapping a premium you don't own for one you do. Hit Generate to rebuild from scratch.</p>`;
+        Star vehicles you own, then set <strong>My garage</strong> to Prefer/Only.
+        Use <strong>Swap</strong> to cycle candidates. Same settings always rebuild the same lineup.</p>`;
   }
 
   // Advance one slot to the next available candidate of its role, in ranked
@@ -431,24 +483,44 @@
       for (const b of $("modeSeg").children) b.classList.toggle("active", b === btn);
       refreshBROptions();
       savePrefs();
+      if (current) tryGenerate();
     });
 
-    $("nation").addEventListener("change", refreshBROptions);
+    $("nation").addEventListener("change", () => {
+      refreshBROptions();
+      if (current) tryGenerate();
+    });
     $("planeRole").addEventListener("change", updateBomberVis);
+    $("targetBR").addEventListener("change", () => { if (current) tryGenerate(); });
 
-    // Remember every control change across reloads.
-    $("lineupForm").addEventListener("change", savePrefs);
+    // Remember every control change across reloads; rebuild if a lineup is showing.
+    $("lineupForm").addEventListener("change", e => {
+      savePrefs();
+      // Don't auto-regen on every keystroke of slots while typing; change is fine.
+      if (current && e.target && e.target.id !== "slots") tryGenerate();
+    });
     $("lineupForm").addEventListener("input", savePrefs);
+    $("slots").addEventListener("change", () => { if (current) tryGenerate(); });
 
     $("lineupForm").addEventListener("submit", e => {
       e.preventDefault();
-      const o = currentOptions();
-      if (Number.isNaN(o.targetBR)) return;
-      renderResult(LINEUP.generate(state.units, o), o);
+      tryGenerate();
     });
 
-    // Delegated: swap buttons are re-rendered on every update.
+    // Delegated: swap / own buttons are re-rendered on every update.
     $("results").addEventListener("click", e => {
+      const ownBtn = e.target.closest(".own-btn");
+      if (ownBtn) {
+        const id = ownBtn.dataset.own;
+        if (!id) return;
+        if (ownedIds.has(id)) ownedIds.delete(id);
+        else ownedIds.add(id);
+        saveOwned(ownedIds);
+        // Rebuild so ownership scoring takes effect immediately.
+        if (current) tryGenerate();
+        else ownBtn.classList.toggle("is-owned");
+        return;
+      }
       const btn = e.target.closest(".swap-btn");
       if (btn && !btn.disabled) swapSlot(parseInt(btn.dataset.slot, 10));
     });
