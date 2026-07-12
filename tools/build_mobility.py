@@ -9,9 +9,11 @@ model file under
                         caps its `speed` field, so real mobility comes from the
                         physics block here.
   data/gunstats.json  — id -> {"v": muzzle velocity m/s, "c": bore mm,
-                        "p": penetration mm at 1000m}. `p` is ONLY written when
-                        the shell has an ArmorPower1000m table (the value the
-                        game client uses). No Lanz-Odermatt/DeMarre estimates.
+                        "p": penetration mm at 1000m, "ps": "table"|"est"}.
+                        Prefer ArmorPower tables (ps=table). If absent, a
+                        physics estimate (ps=est) so modern APFSDS still ranks;
+                        the UI must label estimates so they are never shown as
+                        exact client pen.
   data/spaa.json      — id -> {"sam": 0/1, "radar": 0/1, "cal": mm} for SPAA
                         only. Read straight off the tankmodel: SAM launcher,
                         tracking-radar sensor, largest gun caliber.
@@ -158,20 +160,54 @@ def _armor_power_at(armorpower, distance_m):
     return best
 
 
-def _shell_pen_1000m(bullet, speed, cal_m):
-    """Factual RHA pen (mm) from the shell's armorpower table only.
+def _hitpower_retention(bullet, distance_m=1000.0, default=0.9):
+    hp = bullet.get("hitpower") or bullet.get("hitPower") or {}
+    if not isinstance(hp, dict):
+        return default
+    exact = hp.get(f"HitPower{int(distance_m)}m")
+    if isinstance(exact, list) and exact and isinstance(exact[0], (int, float)):
+        return float(exact[0])
+    return default
 
-    Prefer ArmorPower1000m (what the client usually shows at range). If that
-    row is missing but other ArmorPower distances exist, use the nearest
-    tabulated value (still a game-authored number — never LO/DeMarre).
+
+def _shell_pen_1000m(bullet, speed, cal_m):
+    """1000m RHA pen (mm) and provenance for one AP shell.
+
+    Returns (pen_mm, source) where source is:
+      "table" — ArmorPower* from the shell file (game-authored, preferred)
+      "est"   — physics estimate only when no table exists (LO / DeMarre)
+      None    — cannot determine
+
+    Prefer tables so display stays trustworthy; fall back to estimates so
+    modern long-rod shells without ArmorPower still rank sensibly. The UI
+    labels estimates so they are never confused with exact client values.
     """
     ap = bullet.get("armorpower") or bullet.get("armorPower")
     table = _armor_power_at(ap, 1000.0)
     if table is not None and table > 10:
-        # HEAT stock shells sometimes ship a near-zero kinetic armorpower table
-        # (e.g. ArmorPower0m: [5.0, 10.0]); ignore those junk rows.
-        return round(table)
-    return None
+        # Ignore near-zero HEAT junk tables (e.g. ArmorPower0m: [5.0, 10.0]).
+        return round(table), "table"
+
+    dmg = bullet.get("damage", {})
+    kin = dmg.get("kinetic", {}) if isinstance(dmg, dict) else {}
+    lo_len = kin.get("lanzOdermattWorkingLength")
+    lo_density = kin.get("lanzOdermattDensity")
+
+    # Long-rod APFSDS: calibrated LO-style estimate (not client display pen).
+    if isinstance(lo_len, (int, float)) and isinstance(lo_density, (int, float)) and lo_len > 0:
+        density_ratio = max(lo_density, 1.0) / 7850.0
+        pen_0m = lo_len * (density_ratio ** 0.5) * 0.55
+        retention = _hitpower_retention(bullet, 1000.0, 0.9)
+        return round(pen_0m * (0.85 + 0.15 * retention)), "est"
+
+    # WWII solid shot: DeMarre calibrated to known 88mm KwK36 ≈ 203mm @ 0m.
+    if speed and isinstance(bullet.get("mass"), (int, float)) and cal_m:
+        mass = bullet["mass"]
+        cal_mm = cal_m * 1000
+        pen_0m = 0.00211 * (mass ** 0.71) * (speed ** 1.43) * (cal_mm ** 0.07)
+        retention = _hitpower_retention(bullet, 1000.0, 0.9)
+        return round(pen_0m * (retention ** 1.43)), "est"
+    return None, None
 
 
 def _gun_stats_from_model(model, mods):
@@ -180,7 +216,11 @@ def _gun_stats_from_model(model, mods):
     weps = weps if isinstance(weps, list) else [weps]
 
     best_vel = 0
-    best_pen = 0
+    # Track table vs estimate separately. If the vehicle has ANY ArmorPower
+    # shell, use the best table value (never let a wild LO estimate override
+    # a real client table). Only use estimates when no table exists at all.
+    best_table = 0
+    best_est = 0
     bore_m = 0.0
     for w in weps:
         if not (isinstance(w, dict) and "blk" in w):
@@ -210,18 +250,21 @@ def _gun_stats_from_model(model, mods):
                 v = b.get("speed")
                 if isinstance(v, (int, float)):
                     best_vel = max(best_vel, v)  # fastest AP round = flattest shooter
-                # Penetration at 1000m. Prefer the shell's own armorpower table
-                # (ArmorPower1000m[0] is RHA mm) — this is what the game uses for
-                # display and is correct for 3BM22-class shells (~400mm, not 1000+).
-                # Only fall back to physics estimates when the table is absent
-                # (some long-rod APFSDS store Lanz-Odermatt params instead).
-                pen_1k = _shell_pen_1000m(b, v, cal)
-                if pen_1k is not None:
-                    best_pen = max(best_pen, pen_1k)
+                pen_1k, src = _shell_pen_1000m(b, v, cal)
+                if pen_1k is None:
+                    continue
+                if src == "table":
+                    best_table = max(best_table, pen_1k)
+                elif src == "est":
+                    best_est = max(best_est, pen_1k)
     if best_vel:
         result = {"v": round(best_vel), "c": round(bore_m * 1000, 1)}
-        if best_pen > 0:
-            result["p"] = best_pen
+        if best_table > 0:
+            result["p"] = best_table
+            result["ps"] = "table"
+        elif best_est > 0:
+            result["p"] = best_est
+            result["ps"] = "est"
         return result
     return None  # missile / HE-only / autocannon vehicles have no AP round
 
@@ -771,10 +814,12 @@ def main():
     era_n = sum(1 for v in armor.values() if v.get("era"))
     comp_n = sum(1 for v in armor.values() if v.get("comp"))
     pen_n = sum(1 for v in guns.values() if isinstance(v, dict) and v.get("p"))
+    table_n = sum(1 for v in guns.values() if isinstance(v, dict) and v.get("ps") == "table")
+    est_n = sum(1 for v in guns.values() if isinstance(v, dict) and v.get("ps") == "est")
     print(f"Wrote {len(armor)} entries to {os.path.basename(ARMOR_OUT)} "
           f"({era_n} with ERA, {comp_n} with composite; "
           f"{thermal_n} thermal, {nv_n} night-vision, {stab_n} stabilized)")
-    print(f"Gun pen from ArmorPower tables: {pen_n}/{len(guns)} (others have vel/cal only)")
+    print(f"Gun pen: {pen_n}/{len(guns)} ({table_n} ArmorPower table, {est_n} estimated)")
     if gun_miss:
         print("No-AP vehicles:", ", ".join(gun_miss[:15]) + (" …" if len(gun_miss) > 15 else ""))
 

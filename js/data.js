@@ -46,10 +46,10 @@ const WT_DATA = (() => {
   // already-cached clients re-parse instead of serving the old-format value.
   const SCHEMA = "id name country type cls diveBomber rank br premium squadron gift " +
     "researchPoints armorHull armorTurret hasEra hasComposite stabilized thermal nv revRatio " +
-    "hpPerTon gunVel gunCal gunPen turnTime maxSpeed climbRate " +
+    "hpPerTon gunVel gunCal gunPen gunPenSrc turnTime maxSpeed climbRate " +
     "crewCount reloadTime turretSpeed " +
     "ordnanceKg atgm atgmRange aam arh cm sam radar aaCal " +
-    "fmt:factual-only-pen-armor;air:same-preset-firepower+aam";
+    "fmt:hybrid-pen-table|est;armor:steel+flags;air:aam";
   function hash32(s) {
     let h = 2166136261;
     for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
@@ -275,7 +275,8 @@ const WT_DATA = (() => {
         hpPerTon: null,
         gunVel: null,
         gunCal: null,
-        gunPen: null, // only ArmorPower1000m from shell files (null if absent)
+        gunPen: null,    // mm at ~1km when known
+        gunPenSrc: null, // "table" (ArmorPower) | "est" (physics) | null
         sam: false,
         radar: false,
         aaCal: null,
@@ -391,6 +392,26 @@ const WT_DATA = (() => {
     if (coverage.guns === null) warnings.push("Gun data (gunstats.json) didn't load — Sniper ranking has no pen/velocity values.");
     if (coverage.spaa === null) warnings.push("SPAA data (spaa.json) didn't load — anti-air is ranked by battle rating only.");
     if (coverage.armor === null) warnings.push("Armor data (armor.json) didn't load — Armor ranking has no steel/ERA flags.");
+
+    // Patch-safety: if precomputed tables loaded but coverage collapsed, the
+    // offline builder or datamine format likely broke — shout instead of quietly
+    // ranking on empty stats.
+    if (coverage.mobility != null && coverage.mobility < 500) {
+      warnings.push(`Mobility table looks thin (${coverage.mobility} entries) — Speed ranking may be degraded after a game update.`);
+    }
+    if (coverage.guns != null && coverage.guns < 400) {
+      warnings.push(`Gun table looks thin (${coverage.guns} entries) — Sniper ranking may be degraded after a game update.`);
+    }
+    if (coverage.armor != null && coverage.armor < 500) {
+      warnings.push(`Armor table looks thin (${coverage.armor} entries) — Armor ranking may be degraded after a game update.`);
+    }
+    if (coverage.penWithValue != null && coverage.guns != null && coverage.guns > 200
+        && coverage.penWithValue < 50) {
+      warnings.push("Almost no gun penetration values resolved — pen ranking is degraded (builder/datamine change?).");
+    }
+    if (coverage.thermal != null && coverage.thermal < 20 && coverage.armor != null && coverage.armor > 500) {
+      warnings.push("Almost no thermal flags in armor data — optic ranking may be broken after a game update.");
+    }
     return warnings;
   }
 
@@ -412,7 +433,12 @@ const WT_DATA = (() => {
     // No gun file: Sniper falls back to its class-based proxy.
     if (guns) for (const u of tanks) {
       const g = guns[u.id];
-      if (g) { u.gunVel = g.v ?? null; u.gunCal = g.c ?? null; u.gunPen = g.p ?? null; }
+      if (g) {
+        u.gunVel = g.v ?? null;
+        u.gunCal = g.c ?? null;
+        u.gunPen = g.p ?? null;
+        u.gunPenSrc = g.ps === "table" || g.ps === "est" ? g.ps : (g.p != null ? "est" : null);
+      }
     }
     // No SPAA file: anti-air scoring falls back to BR closeness only.
     if (spaa) for (const u of tanks) {
@@ -433,11 +459,20 @@ const WT_DATA = (() => {
       u.nv = !!a.nv;
       u.revRatio = a.rev || 0;
     }
+    let penWithValue = 0, thermal = 0;
+    if (guns) for (const g of Object.values(guns)) {
+      if (g && g.p != null) penWithValue++;
+    }
+    if (armor) for (const a of Object.values(armor)) {
+      if (a && a.thermal) thermal++;
+    }
     return {
       mobility: mob ? Object.keys(mob).length : null,
       guns: guns ? Object.keys(guns).length : null,
       spaa: spaa ? Object.keys(spaa).length : null,
       armor: armor ? Object.keys(armor).length : null,
+      penWithValue: guns ? penWithValue : null,
+      thermal: armor ? thermal : null,
     };
   }
 

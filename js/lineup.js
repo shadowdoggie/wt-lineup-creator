@@ -15,13 +15,14 @@ const LINEUP = (() => {
   const SPADED = {
     short: "Spaded",
     title:
-      "Uses values from the game files for a fully unlocked vehicle: best AP shell " +
-      "with an ArmorPower table, ERA/composite presence if in the model, thermal/NV " +
-      "upgrades. Pen is never estimated. Stock reload is the exception (not crew-trained).",
+      "Uses game-file data for a fully unlocked vehicle: best equippable AP shell, " +
+      "ERA/composite if present in the model, thermal/NV upgrades. Pen prefers the " +
+      "game's ArmorPower table; if missing, a labeled estimate is used for ranking. " +
+      "Stock reload is not crew-trained.",
     note:
-      "Stats are factual game-file values for a spaded vehicle (ArmorPower pen, steel " +
-      "thickness, ERA/composite flags, optics). Missing pen means no ArmorPower table — " +
-      "not an estimate. Reload time is stock.",
+      "Spaded game-file stats. Pen marked “est.” is a physics fallback when the shell " +
+      "has no ArmorPower table — table values are preferred. Armor is steel + ERA/" +
+      "composite flags (not invented mm). Reload is stock.",
   };
 
   // Ground playstyles. `stat` returns a 0..1 bonus from the vehicle's real
@@ -58,7 +59,7 @@ const LINEUP = (() => {
         return 0.55 * p.penPct(u) + 0.3 * p.velPct(u) + 0.15 * p.calPct(u);
       },
       variety: false,
-      desc: "ArmorPower pen table at 1 km when present (never estimated), else velocity/caliber. Missile-only TDs heavily penalized.",
+      desc: "Gun pen (ArmorPower table preferred, labeled estimate if needed), velocity & caliber. Missile-only TDs heavily penalized.",
     },
   };
 

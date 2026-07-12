@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Daily refresh of the War Thunder precomputed snapshots (mobility.json,
-# gunstats.json, spaa.json, armor.json — now with penetration estimates,
-# stabilization, thermals, NV, and reverse-speed ratio) served at
-# https://wt.shadowdog.cat. Writes straight into the web root (atomically;
-# gunstats/spaa/armor land next to MOBILITY_OUT) and appends to a log.
+# gunstats.json, spaa.json, armor.json) served at https://wt.shadowdog.cat.
+# Pen prefers ArmorPower tables (ps=table), falls back to labeled estimates
+# (ps=est). Armor is steel + ERA/composite flags. Writes atomically into the
+# web root; gunstats/spaa/armor land next to MOBILITY_OUT.
 #
 # Installed on the VPS at /opt/wt-mobility/refresh.sh alongside a copy of
 # build_mobility.py, and triggered by /etc/cron.d/wt-mobility (see
