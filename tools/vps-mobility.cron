@@ -1,0 +1,7 @@
+# Daily refresh of the WT mobility snapshot for https://wt.shadowdog.cat
+# Install as /etc/cron.d/wt-mobility (root-owned, mode 644).
+# Runs build_mobility.py and writes /var/www/wt/data/mobility.json atomically.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+MAILTO=""
+17 4 * * * root /opt/wt-mobility/refresh.sh

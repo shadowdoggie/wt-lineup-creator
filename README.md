@@ -18,10 +18,29 @@ A War Thunder lineup generator that pulls **live battle ratings and vehicle data
   - **Fighters** — ranked by sustained **turn time**.
   - **Ground pounders** — ranked by **bomb/rocket payload**.
 - **Per-slot swap** — every slot has a ⟳ Swap button that cycles to the next-best vehicle of the same role (respecting your playstyle). Handy for swapping a premium you don't own for one you do.
+- **Lineup health check** — a fact-based "is this good enough?" panel scores every generated lineup against War Thunder's matchmaker rules. It reports the BR you'll actually queue at (your highest vehicle), how many vehicles stay competitive in a full +1.0 uptier (within 0.3 of your top BR), how many are downtier-only ballast (0.7+ below), and whether you have SPAA/air cover — then gives a Strong / Solid / Thin verdict. A 5.7 in a 6.0 lineup is correctly treated as competitive (only 0.3 down), not a problem.
 
 ## Live
 
 Deployed at **https://wt.shadowdog.cat** (VPS + Caddy, static files in `/var/www/wt`). Redeploy with `./deploy.sh`.
+
+The `wt.shadowdog.cat` Caddy site sends `Cache-Control: no-cache` (with ETags), so browsers revalidate on every load — deploys reach users immediately (cheap `304`s when nothing changed) instead of getting stuck on a stale cached copy.
+
+### Daily mobility refresh (VPS cron)
+
+`data/mobility.json` (tank hp/ton) is regenerated automatically once a day on the
+server so the live site tracks engine/weight changes without a manual redeploy.
+A full rebuild takes **~12–15 seconds** (1,230 tanks, fetched concurrently).
+Setup, reproducible from this repo:
+
+- `tools/build_mobility.py` honors a `MOBILITY_OUT` env var, so it can write
+  straight into the web root; it writes atomically and refuses to overwrite a
+  good file if a network hiccup resolves too few tanks.
+- `tools/vps-mobility-refresh.sh` → installed at `/opt/wt-mobility/refresh.sh`
+  (next to a copy of `build_mobility.py`), sets `MOBILITY_OUT=/var/www/wt/data/mobility.json`
+  and logs to `/var/log/wt-mobility.log`.
+- `tools/vps-mobility.cron` → installed at `/etc/cron.d/wt-mobility`, runs it
+  daily at 04:17 UTC.
 
 ## Running it locally
 

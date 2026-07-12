@@ -171,6 +171,28 @@
       </div>`;
   }
 
+  // Fact-based "is this lineup good enough?" panel. Numbers come straight from
+  // LINEUP.assess (top BR, competitive-respawn count, etc.).
+  function healthPanel(h) {
+    if (!h) return "";
+    const NOTE_ICON = { good: "✅", info: "ℹ️", warn: "⚠️" };
+    const stat = (label, val) => `<div class="hc-stat"><span class="hc-val">${val}</span><span class="hc-lbl">${label}</span></div>`;
+    return `
+      <div class="health-card hc-${h.verdict.key}">
+        <div class="hc-head">
+          <span class="hc-verdict">${h.verdict.label}</span>
+          <div class="hc-stats">
+            ${stat("queue BR", h.topBR.toFixed(1))}
+            ${stat("competitive respawns", `${h.core}/${h.total}`)}
+            ${stat("avg BR", h.avgBR.toFixed(1))}
+          </div>
+        </div>
+        <ul class="hc-notes">
+          ${h.notes.map(n => `<li class="hc-${n.level}">${NOTE_ICON[n.level] || "•"} ${esc(n.text)}</li>`).join("")}
+        </ul>
+      </div>`;
+  }
+
   function renderResult(result, o) {
     current = { result, options: o };
     const nationLabel = WT_DATA.NATIONS.find(n => n[0] === o.nation)?.[1] || o.nation;
@@ -179,6 +201,7 @@
       ${result.warnings.length ? `<div class="warnings">${result.warnings.map(w => `<div class="warning">⚠️ ${w}</div>`).join("")}</div>` : ""}
       <h2>${nationLabel} · BR ${(o.targetBR - LINEUP.BR_WINDOW).toFixed(1)}–${o.targetBR.toFixed(1)}
         <span class="sub">· ${modeLabel} · ${result.slots.length} vehicles</span></h2>
+      ${healthPanel(result.health)}
       <div class="lineup-grid">${result.slots.map((s, i) => slotCard(s, i, o.mode, result)).join("")}</div>
       <p class="pool-note">${result.poolSize} vehicles matched your filters in this bracket.
         Use <strong>⟳ Swap</strong> on any slot to cycle to the next-best pick of that role — handy for

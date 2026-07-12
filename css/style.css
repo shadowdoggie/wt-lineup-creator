@@ -206,6 +206,53 @@ select:focus, input:focus { outline: none; border-color: var(--gold-dim); }
   margin-bottom: 6px;
 }
 
+/* ---------- Lineup health / sufficiency check ---------- */
+
+.health-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--text-dim);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 18px;
+}
+.health-card.hc-strong { border-left-color: var(--green); }
+.health-card.hc-solid  { border-left-color: var(--gold); }
+.health-card.hc-thin   { border-left-color: var(--red); }
+
+.hc-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.hc-verdict {
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+.hc-strong .hc-verdict { color: var(--green); }
+.hc-solid  .hc-verdict { color: var(--gold); }
+.hc-thin   .hc-verdict { color: var(--red); }
+
+.hc-stats { display: flex; gap: 18px; }
+.hc-stat { display: flex; flex-direction: column; align-items: center; line-height: 1.15; }
+.hc-val { font-size: 1.15rem; font-weight: 700; color: var(--text); }
+.hc-lbl { font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.6px; color: var(--text-dim); }
+
+.hc-notes { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.hc-notes li {
+  font-size: 0.83rem;
+  line-height: 1.4;
+  color: var(--text);
+  padding-left: 2px;
+}
+.hc-notes li.hc-warn { color: #e7c37a; }
+.hc-notes li.hc-good { color: var(--green); }
+.hc-notes li.hc-info { color: var(--text-dim); }
+
 .lineup-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));

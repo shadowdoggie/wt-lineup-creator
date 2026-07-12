@@ -21,7 +21,12 @@ import urllib.request
 
 RAW = "https://raw.githubusercontent.com/gszabi99/War-Thunder-Datamine/master/"
 TANKMODELS = "aces.vromfs.bin_u/gamedata/units/tankmodels/"
-OUT = os.path.join(os.path.dirname(__file__), "..", "data", "mobility.json")
+# Defaults to the repo's data/ dir; the daily VPS cron overrides this with
+# MOBILITY_OUT so it can write straight into the served web root.
+OUT = os.environ.get(
+    "MOBILITY_OUT",
+    os.path.join(os.path.dirname(__file__), "..", "data", "mobility.json"),
+)
 
 
 def get(url):
@@ -75,10 +80,22 @@ def main():
             if done % 200 == 0:
                 print(f"  {done}/{len(tanks)}")
 
+    # Bail out rather than clobber a good file if a network hiccup left us with
+    # almost nothing (the daily cron writes into the live web root).
+    if len(result) < 0.5 * len(tanks):
+        raise SystemExit(
+            f"Only {len(result)}/{len(tanks)} tanks resolved — refusing to "
+            f"overwrite {OUT}. Likely a network issue; leaving the old file."
+        )
+
     result = dict(sorted(result.items()))
-    os.makedirs(os.path.dirname(OUT), exist_ok=True)
-    with open(OUT, "w", encoding="utf-8") as f:
+    out_dir = os.path.dirname(os.path.abspath(OUT))
+    os.makedirs(out_dir, exist_ok=True)
+    # Atomic write: a visitor mid-cron never sees a half-written file.
+    tmp = OUT + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(result, f, separators=(",", ":"), sort_keys=True)
+    os.replace(tmp, OUT)
 
     print(f"\nWrote {len(result)} entries to data/mobility.json "
           f"({len(misses)} without physics data, will use fallback)")

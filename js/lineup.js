@@ -184,7 +184,74 @@ const LINEUP = (() => {
     if (o.incSPAA && spaas.length && o.slots < 3) warnings.push("SPAA skipped — needs at least 3 crew slots.");
     if (o.incHelis && !helis.length) warnings.push("No helicopters available in this BR bracket.");
 
-    return { slots, pools, used, poolSize: pool.length, warnings };
+    const health = assess(slots, o);
+
+    return { slots, pools, used, poolSize: pool.length, warnings, health };
+  }
+
+  // Fact-based sufficiency check. Everything here follows from War Thunder's
+  // matchmaker rules and the actual BRs of the vehicles that got picked — no
+  // opinion, just numbers the player can verify.
+  //
+  //   • You queue at the HIGHEST BR vehicle in your lineup (your "top BR").
+  //   • The matchmaker can up/down-tier you by ±1.0, so at top BR T you face
+  //     anything from T-1.0 to T+1.0.
+  //   • A vehicle is a competitive respawn if it's within 0.3 of your top BR
+  //     (still ≤ enemy top even in a full uptier band). One that sits ≥0.7
+  //     below is "downtier ballast": fine in a downtier, badly outmatched when
+  //     you're uptiered.
+  function assess(slots, o) {
+    const mode = o.mode;
+    const brs = slots.map(s => s.unit.br[mode]).filter(b => b != null);
+    if (!brs.length) return null;
+
+    const topBR = Math.max(...brs);
+    const avgBR = brs.reduce((a, b) => a + b, 0) / brs.length;
+    const core = brs.filter(b => topBR - b <= 0.3 + 1e-9).length;      // competitive respawns
+    const ballast = brs.filter(b => topBR - b >= 0.7 - 1e-9).length;   // weak when uptiered
+    const hasSPAA = slots.some(s => s.category === "spaa");
+    const hasAir = slots.some(s => ["fighter", "attacker", "heli"].includes(s.category));
+    const belowTarget = o.targetBR - topBR;
+
+    // Headline verdict is driven by how many competitive respawns you have.
+    let verdict;
+    if (core >= 3 && ballast <= core) verdict = { key: "strong", label: "Strong lineup" };
+    else if (core >= 2) verdict = { key: "solid", label: "Solid lineup" };
+    else verdict = { key: "thin", label: "Thin at top BR" };
+
+    const notes = [];
+    // The core fact that answers "why is there a lower-BR vehicle here?"
+    notes.push({
+      level: "info",
+      text: `You queue at BR ${topBR.toFixed(1)} (your highest vehicle). The matchmaker can uptier you +1.0, so expect enemies up to BR ${(topBR + 1.0).toFixed(1)} and downtiers to ${(topBR - 1.0).toFixed(1)}.`,
+    });
+
+    if (belowTarget >= 0.3 - 1e-9) {
+      notes.push({
+        level: "warn",
+        text: `Your best vehicle is only BR ${topBR.toFixed(1)}, so you'll queue ${belowTarget.toFixed(1)} below your ${o.targetBR.toFixed(1)} target. Enable more vehicle sources (premium/squadron/event) or pick a lower target BR to get a full top-BR lineup.`,
+      });
+    }
+
+    notes.push({
+      level: core >= 3 ? "good" : core >= 2 ? "info" : "warn",
+      text: `${core} of ${brs.length} vehicle(s) sit within 0.3 of your top BR — these stay competitive in a full uptier. ${core < 2 ? "With fewer than 2, once your top vehicle dies you're spawning into a disadvantage." : "That's enough depth to keep respawning effectively."}`,
+    });
+
+    if (ballast > 0) {
+      notes.push({
+        level: ballast > core ? "warn" : "info",
+        text: `${ballast} vehicle(s) are 0.7+ below your top BR — strong in a downtier but outmatched when you're uptiered.${ballast > core ? " More than half your lineup is in this range, so uptiers will be rough." : ""}`,
+      });
+    }
+
+    notes.push(hasSPAA
+      ? { level: "good", text: "SPAA included — you can answer enemy CAS." }
+      : { level: "warn", text: "No SPAA — you'll be exposed to enemy aircraft with no dedicated answer." });
+
+    if (!hasAir) notes.push({ level: "info", text: "No aircraft — no way to contribute from the air or counter enemy planes offensively." });
+
+    return { topBR, avgBR, targetBR: o.targetBR, core, ballast, total: brs.length, hasSPAA, hasAir, verdict, notes };
   }
 
   return { generate, BR_WINDOW };
