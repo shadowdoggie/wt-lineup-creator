@@ -625,11 +625,18 @@ def _night_vision(model):
     #    so scan them all rather than one hard-coded key.
     mods = model.get("modifications")
     if isinstance(mods, dict):
-        for mod in mods.values():
-            if isinstance(mod, dict):
-                effects = mod.get("effects")
-                if isinstance(effects, dict):
-                    scan(effects.get("nightVision"))
+        for mod_name, mod in mods.items():
+            if not isinstance(mod, dict):
+                continue
+            effects = mod.get("effects")
+            if isinstance(effects, dict):
+                scan(effects.get("nightVision"))
+            # Robustness for future patches: a modification whose *name* calls
+            # out thermal is a thermal-sight upgrade, even if Gaijin restructures
+            # where the sight parameters live (the "..._nv_to_thermal" pattern).
+            if "thermal" in _key_tokens(mod_name):
+                thermal = True
+                nv = True
     # 3) hasNightVision flag on turret weapons — least specific (NV, not thermal).
     if not (thermal or nv):
         common = model.get("commonWeapons") or {}
@@ -708,6 +715,28 @@ def _guard_regression(label, new_count, path):
         )
 
 
+def _guard_field_regression(label, field, new_count, path):
+    """Like _guard_regression, but guards the count of tanks carrying a boolean
+    capability (thermal / nv / stab) rather than the total row count. This is the
+    net that catches a *silent* detection break: if a future War Thunder patch
+    moves or renames where thermals live, the entry count stays ~1230 (so the
+    row-count guard passes) while the thermal field quietly collapses to zero.
+    A >50% drop against the last good file fails the run loud instead, so the
+    cron keeps the previous correct data and logs the failure."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            old = json.load(f)
+    except (OSError, ValueError):
+        return  # no prior file to compare against — first run
+    old_count = sum(1 for v in old.values() if isinstance(v, dict) and v.get(field))
+    if old_count >= 20 and new_count < 0.5 * old_count:
+        raise SystemExit(
+            f"{label}: only {new_count} tanks with '{field}' vs {old_count} last "
+            f"run (>50% drop) — refusing to overwrite {path}. A datamine change "
+            f"likely broke {field} detection; inspect before rebuilding."
+        )
+
+
 def _atomic_write(path, obj):
     out_dir = os.path.dirname(os.path.abspath(path))
     os.makedirs(out_dir, exist_ok=True)
@@ -763,6 +792,15 @@ def main():
     _guard_regression("gunstats", len(guns), GUNSTATS_OUT)
     _guard_regression("spaa", len(spaa), SPAA_OUT)
     _guard_regression("armor", len(armor), ARMOR_OUT)
+    # Capability-field guards: catch a silent break in thermal/NV/stab detection
+    # (the row count would still look fine). Must run before the armor file is
+    # overwritten so they compare against the last good run.
+    thermal_n = sum(1 for v in armor.values() if v.get("thermal"))
+    nv_n = sum(1 for v in armor.values() if v.get("nv"))
+    stab_n = sum(1 for v in armor.values() if v.get("stab"))
+    _guard_field_regression("armor/thermal", "thermal", thermal_n, ARMOR_OUT)
+    _guard_field_regression("armor/nv", "nv", nv_n, ARMOR_OUT)
+    _guard_field_regression("armor/stab", "stab", stab_n, ARMOR_OUT)
 
     _atomic_write(MOBILITY_OUT, dict(sorted(mobility.items())))
     _atomic_write(GUNSTATS_OUT, dict(sorted(guns.items())))
@@ -778,7 +816,8 @@ def main():
           f"{os.path.basename(SPAA_OUT)} ({sam_n} with SAMs)")
     era_n = sum(1 for v in armor.values() if v.get("eff", 0) > max(v.get("h", 0), v.get("t", 0)))
     print(f"Wrote {len(armor)} entries to {os.path.basename(ARMOR_OUT)} "
-          f"({era_n} with ERA/composite beyond raw steel)")
+          f"({era_n} with ERA/composite beyond raw steel; "
+          f"{thermal_n} thermal, {nv_n} night-vision, {stab_n} stabilized)")
     if gun_miss:
         print("No-AP vehicles:", ", ".join(gun_miss[:15]) + (" …" if len(gun_miss) > 15 else ""))
 
