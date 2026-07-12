@@ -25,6 +25,7 @@
 
   const state = { units: [], mode: "realistic", fetchedAt: null, desiredBR: null };
   let current = null; // { result, options } — kept so swaps can mutate the lineup
+  let loading = false; // guards against overlapping downloads (e.g. Refresh spam)
 
   // Form state is remembered across page reloads (see save/loadPrefs). Bump the
   // key if the set of saved fields changes in an incompatible way.
@@ -33,6 +34,12 @@
   /* ---------- data loading ---------- */
 
   async function loadData(force) {
+    // Ignore clicks (e.g. Refresh spam) while a download is already in flight —
+    // otherwise every click kicks off another concurrent fetch of the same data.
+    if (loading) return;
+    loading = true;
+    const refreshBtn = $("refreshBtn");
+    refreshBtn.disabled = true;
     const overlay = $("loadingOverlay");
     const errEl = $("loadError");
     overlay.hidden = false;
@@ -55,6 +62,9 @@
         " — check your internet connection, then hit Refresh.";
       errEl.hidden = false;
       $("dataStatusText").textContent = "No data";
+    } finally {
+      loading = false;
+      refreshBtn.disabled = false;
     }
   }
 
@@ -200,7 +210,8 @@
   /* ---------- rendering ---------- */
 
   function esc(s) {
-    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   }
 
   function badgeFor(slot) {
@@ -230,8 +241,10 @@
     if (u.type === "tank" && slot.category !== "spaa") {
       if (u.hpPerTon != null) bits.push(`<span title="Real horsepower-per-ton">${u.hpPerTon} hp/t</span>`);
       const armor = [];
-      if (u.armorHull != null) armor.push(`H ${u.armorHull}`);
-      if (u.armorTurret != null) armor.push(`T ${u.armorTurret}`);
+      // Truthy (not `!= null`): an open-top / unarmored vehicle like the M56 has
+      // 0 mm here, and "🛡️ 0" reads oddly — omit the value entirely instead.
+      if (u.armorHull) armor.push(`H ${u.armorHull}`);
+      if (u.armorTurret) armor.push(`T ${u.armorTurret}`);
       if (armor.length) bits.push(`<span title="Frontal armor (mm)">🛡️ ${armor.join(" / ")}</span>`);
       if (u.gunVel != null) bits.push(`<span title="Fastest AP shell muzzle velocity${u.gunCal ? ` · ${u.gunCal}mm bore` : ""}">🎯 ${u.gunVel} m/s</span>`);
     } else if (slot.category === "spaa") {

@@ -43,7 +43,12 @@ const LINEUP = (() => {
     return u => {
       const v = valueFn(u);
       if (v == null) return null;
-      return vals.length > 1 ? vals.indexOf(v) / (vals.length - 1) : 0.5;
+      if (vals.length <= 1) return 0.5;
+      // Tied values share a rank: use the midpoint of their index range so a
+      // whole tied group scores as the middle of the tie, not its bottom
+      // (indexOf alone would rank every tie as the worst of the group).
+      const rank = (vals.indexOf(v) + vals.lastIndexOf(v)) / 2;
+      return rank / (vals.length - 1);
     };
   }
 
