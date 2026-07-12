@@ -306,9 +306,10 @@
       if (u.thermal) bits.push(stat("Thermal imaging (researchable upgrades counted)", `${ico("i-scope")} Thermal`));
       else if (u.nv) bits.push(stat("Night vision", `${ico("i-scope")} NV`));
       if (u.reloadTime != null) {
-        const auto = u.reloadTime <= 6;
-        bits.push(stat(auto ? "Stock autoloader cycle (not crew-trained)" : "Stock manual reload (not crew-trained)",
-          `${ico("i-refresh")} ${u.reloadTime}s${auto ? " auto" : ""}`));
+        // "auto" only for real autoloaders (the game's own flag) — a 5s
+        // human-loaded gun is fast, not automatic.
+        bits.push(stat(u.autoLoader ? "Autoloader cycle" : "Stock manual reload (not crew-trained)",
+          `${ico("i-refresh")} ${u.reloadTime}s${u.autoLoader ? " auto" : ""}`));
       }
       if (u.crewCount != null) bits.push(stat("Crew count", `${ico("i-users")} ${u.crewCount}`));
       // Gun velocity/caliber only on the card — no pen mm (table or estimate).

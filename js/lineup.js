@@ -20,8 +20,9 @@ const LINEUP = (() => {
       "game's ArmorPower table; if missing, a labeled estimate is used for ranking. " +
       "Stock reload is not crew-trained.",
     note:
-      "Spaded game-file stats. Gun cards show velocity (not pen mm). Armor is steel + " +
-      "ERA/composite flags. Reload is stock. Pen still helps Sniper ranking behind the scenes.",
+      "Spaded game-file stats. Gun cards show velocity (not pen mm). Cards show factual " +
+      "steel + ERA/composite flags; armor RANKING uses an internal protection score that " +
+      "also counts composite arrays and ERA coverage. Reload is stock.",
   };
 
   // Ground playstyles. `stat` returns a 0..1 bonus from the vehicle's real
@@ -36,12 +37,13 @@ const LINEUP = (() => {
     },
     armor: {
       classW: { heavy: 1.0, medium: 0.8, td: 0.6, light: 0.15 },
-      // Factual frontal steel + ERA/composite flags from the model (not invented mm).
+      // Effective-protection score (steel×quality + composite arrays + ERA
+      // coverage, precomputed in armor.json). ERA/composite are already folded
+      // into that score, so no separate boolean bonuses here.
       stat: (u, p) =>
-        0.55 * p.armorPct(u) + 0.15 * p.reloadPct(u) + 0.1 * p.crewPct(u) +
-        (u.hasEra ? 0.15 : 0) + (u.hasComposite ? 0.05 : 0),
+        0.7 * p.armorPct(u) + 0.2 * p.reloadPct(u) + 0.1 * p.crewPct(u),
       variety: false, // mono-class wall is the point
-      desc: "Heavy wall. Frontal steel thickness + ERA/composite presence (factual), reload & crew. No class-mix damping.",
+      desc: "Heavy wall. Effective protection (steel + composite + ERA coverage), reload & crew. No class-mix damping.",
     },
     speed: {
       classW: { light: 1.0, medium: 0.85, td: 0.5, heavy: 0.1 },
@@ -133,10 +135,13 @@ const LINEUP = (() => {
     const helis = pool.filter(u => u.type === "helicopter");
 
     // --- scoring context ---
-    // Armor: factual frontal steel only (thickest of hull/turret front). ERA and
-    // composite are separate boolean bonuses in the Armor playstyle — never
-    // converted into a fake "effective mm".
-    const armorValue = u => Math.max(u.armorHull ?? 0, u.armorTurret ?? 0);
+    // Armor RANKING uses the precomputed effective-protection score (steel ×
+    // quality + composite arrays + ERA coverage). Raw steel alone inverted the
+    // ordering at top tier: welded-composite turrets (T-80UD, Leo 2A6) report
+    // 45–80mm backing plates while cast turrets (T-64/T-72) report 250–400mm.
+    // Cards still display only the factual steel mm — eff is never shown.
+    const armorValue = u =>
+      u.armorEff ?? Math.max(u.armorHull ?? 0, u.armorTurret ?? 0);
     const armorPctRaw = percentiler(mains, u => {
       const a = armorValue(u);
       return a > 0 ? a : null;
@@ -146,9 +151,12 @@ const LINEUP = (() => {
     const calPctRaw = percentiler(mains, u => u.gunCal);
     // Pen only when ArmorPower table exists (gunPen set). No estimates.
     const penPctRaw = percentiler(mains, u => u.gunPen);
-    // Reload: don't mix autoloaders (~≤6s) with manual loaders in one percentile.
-    // Autoloaders get a high fixed band; manuals are ranked among themselves.
-    const manualReloadPool = mains.filter(u => u.reloadTime != null && u.reloadTime > 6);
+    // Reload: don't mix autoloaders with manual loaders in one percentile —
+    // manual reloads improve with crew training, autoloader cycles don't. The
+    // split uses the game's own autoLoader flag (a 5s human-loaded M1A1 is not
+    // an autoloader; a 7.1s T-72 carousel is). Autoloaders get a high fixed
+    // band; manuals are ranked among themselves.
+    const manualReloadPool = mains.filter(u => u.reloadTime != null && !u.autoLoader);
     const manualReloadPct = percentiler(manualReloadPool, u => -u.reloadTime);
     const revPctRaw = percentiler(mains, u => u.revRatio > 0 ? u.revRatio : null);
     const turretPctRaw = percentiler(mains, u => u.turretSpeed ?? null);
@@ -165,7 +173,8 @@ const LINEUP = (() => {
       penPct: u => penPctRaw(u) ?? 0,
       reloadPct: u => {
         if (u.reloadTime == null) return 0;
-        if (u.reloadTime <= 6) return 0.88 + Math.min(0.12, (6 - u.reloadTime) / 50);
+        // Autoloader band 0.88–1.0, faster cycle = higher (8s → 0.88, 4s → 0.98).
+        if (u.autoLoader) return 0.88 + Math.min(0.12, Math.max(0, 8 - u.reloadTime) / 40);
         return manualReloadPct(u) ?? 0;
       },
       revPct: u => revPctRaw(u) ?? 0,

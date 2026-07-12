@@ -45,11 +45,11 @@ const WT_DATA = (() => {
   // without its field name changing (e.g. name-marker stripping below), so
   // already-cached clients re-parse instead of serving the old-format value.
   const SCHEMA = "id name country type cls diveBomber rank br premium squadron gift " +
-    "researchPoints armorHull armorTurret hasEra hasComposite stabilized thermal nv revRatio " +
-    "hpPerTon gunVel gunCal gunPen gunPenSrc turnTime maxSpeed climbRate " +
+    "researchPoints armorHull armorTurret armorEff hasEra hasComposite stabilized thermal nv revRatio " +
+    "hpPerTon gunVel gunCal gunPen gunPenSrc autoLoader turnTime maxSpeed climbRate " +
     "crewCount reloadTime turretSpeed " +
     "ordnanceKg atgm atgmRange aam arh cm sam radar aaCal " +
-    "fmt:hybrid-pen-table|est;armor:steel+flags;air:aam";
+    "fmt:hybrid-pen-table|est;armor:steel+flags+eff;reload:al-flag;air:aam";
   function hash32(s) {
     let h = 2166136261;
     for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
@@ -266,8 +266,10 @@ const WT_DATA = (() => {
         gift: !!(w.gift || w.event || w.showOnlyWhenBought),
         armorHull: Array.isArray(shop.armorThicknessHull) ? shop.armorThicknessHull[0] : null,
         armorTurret: Array.isArray(shop.armorThicknessTurret) ? shop.armorThicknessTurret[0] : null,
+        armorEff: null,      // armor.json — ranking-only protection score (never shown as mm)
         hasEra: false,       // armor.json — ERA tiles present in model
         hasComposite: false, // armor.json — composite/NERA arrays present
+        autoLoader: false,   // armor.json — game's own autoLoader flag on the main gun
         stabilized: false,
         thermal: false,
         nv: false,
@@ -445,15 +447,18 @@ const WT_DATA = (() => {
       const s = spaa[u.id];
       if (s) { u.sam = !!s.sam; u.radar = !!s.radar; u.aaCal = s.cal || null; }
     }
-    // Factual armor: steel plate thicknesses + ERA/composite presence flags +
-    // stab/thermals/NV/reverse. No synthetic "effective mm".
+    // Armor: factual steel plate thicknesses (displayed) + ranking-only eff
+    // protection score + ERA/composite presence flags + stab/thermals/NV/
+    // reverse + the game's autoloader flag.
     if (armor) for (const u of tanks) {
       const a = armor[u.id];
       if (!a) continue;
       if (a.h > 0) u.armorHull = a.h;
       if (a.t > 0) u.armorTurret = a.t;
+      if (a.eff > 0) u.armorEff = a.eff;
       u.hasEra = !!a.era;
       u.hasComposite = !!a.comp;
+      u.autoLoader = !!a.al;
       u.stabilized = !!a.stab;
       u.thermal = !!a.thermal;
       u.nv = !!a.nv;
