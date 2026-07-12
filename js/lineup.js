@@ -47,8 +47,15 @@ const LINEUP = (() => {
     };
   }
 
+  // Sort by score, high to low. Exact score ties (identical stats, or shared
+  // fallbacks when data is missing) break toward the vehicle with the most
+  // research points — i.e. the more advanced pick when two are a dead heat.
   function rankBy(arr, scoreFn) {
-    return arr.slice().sort((a, b) => scoreFn(b) - scoreFn(a));
+    return arr.slice().sort((a, b) => {
+      const d = scoreFn(b) - scoreFn(a);
+      if (Math.abs(d) > 1e-9) return d;
+      return (b.researchPoints || 0) - (a.researchPoints || 0);
+    });
   }
 
   function generate(units, o) {
@@ -100,11 +107,14 @@ const LINEUP = (() => {
     const turnQuality = u => 1 - (turnPctRaw(u) ?? 0.7); // lower turn time is better
     const fighterScore = u =>
       brScore(u.br[o.mode], o.targetBR) * 1.2 + turnQuality(u) * 1.4 + (u.cls === "fighter" ? 0.4 : 0);
-    // CAS by real firepower — a modern ATGM/guided-bomb jet no longer scores
-    // like a WWII light bomber that happens to carry more small bombs.
+    // CAS by real firepower, but weighted for ground-RB reality: a purpose-built
+    // attacker (dive bomber / strike jet) is what you want. A high-altitude
+    // strategic bomber carries far more tonnage, yet spawns high, can't dive
+    // accurately on tanks, and is easy SPAA food — so raw payload alone must not
+    // let a B-29 win the CAS slot. Reward attackers, penalize heavy bombers.
     const attackerScore = u =>
-      brScore(u.br[o.mode], o.targetBR) * 1.2 + (payPctRaw(u) ?? 0) * 1.4 +
-      (u.cls === "attacker" || u.cls === "bomber" ? 0.4 : 0);
+      brScore(u.br[o.mode], o.targetBR) * 1.2 + (payPctRaw(u) ?? 0) * 1.2 +
+      (u.cls === "attacker" ? 0.8 : 0) - (u.cls === "bomber" ? 0.7 : 0);
 
     // Helicopters live and die by their anti-tank punch, so rank by firepower
     // and ATGM capability — not BR closeness, which is all the old model used.
@@ -145,7 +155,13 @@ const LINEUP = (() => {
         }
       }
     }
-    let spaaN = (o.incSPAA && spaas.length && o.slots >= 3) ? 1 : 0;
+    // SPAA count scales with lineup size instead of being hard-capped at 1: a
+    // big lineup (8+ slots) warrants a second anti-air when the bracket has one
+    // to spare, since deeper lineups mean more time exposed to enemy CAS.
+    let spaaN = 0;
+    if (o.incSPAA && spaas.length && o.slots >= 3) {
+      spaaN = (o.slots >= 8 && spaas.length >= 2) ? 2 : 1;
+    }
     let heliN = (o.incHelis && helis.length && o.slots >= 5) ? 1 : 0;
 
     // Always reserve at least two slots (or all, for tiny lineups) for mains.
@@ -211,6 +227,7 @@ const LINEUP = (() => {
     if (o.incSPAA && !spaas.length) warnings.push("No SPAA available in this BR bracket.");
     if (o.incSPAA && spaas.length && o.slots < 3) warnings.push("SPAA skipped — needs at least 3 crew slots.");
     if (o.incHelis && !helis.length) warnings.push("No helicopters available in this BR bracket.");
+    if (o.incHelis && helis.length && o.slots < 5) warnings.push("Helicopter skipped — needs at least 5 crew slots.");
 
     const health = assess(slots, o);
 
@@ -235,8 +252,17 @@ const LINEUP = (() => {
 
     const topBR = Math.max(...brs);
     const avgBR = brs.reduce((a, b) => a + b, 0) / brs.length;
-    const core = brs.filter(b => topBR - b <= 0.3 + 1e-9).length;      // competitive respawns
-    const ballast = brs.filter(b => topBR - b >= 0.7 - 1e-9).length;   // weak when uptiered
+    // "Competitive respawns" measures GROUND depth only. A plane or SPAA sitting
+    // at top BR isn't a vehicle you respawn into to brawl tanks, so counting it
+    // would make the lineup look deeper at top BR than it really is.
+    const groundBrs = slots
+      .filter(s => s.category === "ground")
+      .map(s => s.unit.br[mode])
+      .filter(b => b != null);
+    const corePool = groundBrs.length ? groundBrs : brs; // all-air lineup: fall back to every vehicle
+    const core = corePool.filter(b => topBR - b <= 0.3 + 1e-9).length;      // competitive respawns
+    const ballast = corePool.filter(b => topBR - b >= 0.7 - 1e-9).length;   // weak when uptiered
+    const coreTotal = corePool.length;
     const hasSPAA = slots.some(s => s.category === "spaa");
     const hasAir = slots.some(s => ["fighter", "attacker", "heli"].includes(s.category));
     const belowTarget = o.targetBR - topBR;
@@ -263,7 +289,7 @@ const LINEUP = (() => {
 
     notes.push({
       level: core >= 3 ? "good" : core >= 2 ? "info" : "warn",
-      text: `${core} of ${brs.length} vehicle(s) sit within 0.3 of your top BR — these stay competitive in a full uptier. ${core < 2 ? "With fewer than 2, once your top vehicle dies you're spawning into a disadvantage." : "That's enough depth to keep respawning effectively."}`,
+      text: `${core} of ${coreTotal} ground vehicle(s) sit within 0.3 of your top BR — these stay competitive in a full uptier. ${core < 2 ? "With fewer than 2, once your top vehicle dies you're spawning into a disadvantage." : "That's enough depth to keep respawning effectively."}`,
     });
 
     if (ballast > 0) {
@@ -286,7 +312,7 @@ const LINEUP = (() => {
 
     if (!hasAir) notes.push({ level: "info", text: "No aircraft — no way to contribute from the air or counter enemy planes offensively." });
 
-    return { topBR, avgBR, targetBR: o.targetBR, core, ballast, total: brs.length, hasSPAA, hasAir, verdict, notes };
+    return { topBR, avgBR, targetBR: o.targetBR, core, ballast, total: coreTotal, hasSPAA, hasAir, verdict, notes };
   }
 
   return { generate, BR_WINDOW };

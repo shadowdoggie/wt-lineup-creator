@@ -40,8 +40,8 @@ const WT_DATA = (() => {
   // any change to the unit shape automatically invalidates stale caches — no
   // more remembering to bump a manual "_v2". Add new fields to this string.
   const SCHEMA = "id name country type cls rank br premium squadron gift " +
-    "armorHull armorTurret hpPerTon gunVel gunCal turnTime ordnanceKg atgm " +
-    "atgmRange sam radar aaCal";
+    "researchPoints armorHull armorTurret hpPerTon gunVel gunCal turnTime " +
+    "ordnanceKg atgm atgmRange sam radar aaCal";
   function hash32(s) {
     let h = 2166136261;
     for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
@@ -178,6 +178,10 @@ const WT_DATA = (() => {
         type,
         cls,
         rank: w.rank || 1,
+        // Research points (RP) to unlock. 0 for premium/gift/starter vehicles.
+        // Used only as a tiebreak between equally-scored picks (prefer the more
+        // advanced vehicle when two are otherwise a dead heat).
+        researchPoints: num(w.reqExp),
         br: {
           arcade:    brFor(w, null, "economicRankArcade"),
           realistic: brFor(w, air ? "economicRankTankHistorical" : null, "economicRankHistorical"),
