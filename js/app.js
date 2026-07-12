@@ -125,6 +125,9 @@
   }
 
   function currentOptions() {
+    // The CAS-restriction dropdown maps to the two booleans lineup.js consumes:
+    // "both" = level OR dive bombers only, "any" = no restriction.
+    const casType = $("casType").value;
     return {
       nation: nationId(),
       mode: state.mode,
@@ -133,8 +136,8 @@
       incSPAA: $("incSPAA").checked,
       incHelis: $("incHelis").checked,
       planeRole: $("planeRole").value,
-      levelBombersCAS: $("levelBombersCAS").checked,
-      diveBombersCAS: $("diveBombersCAS").checked,
+      levelBombersCAS: casType === "level" || casType === "both",
+      diveBombersCAS: casType === "dive" || casType === "both",
       incPremium: $("incPremium").checked,
       incSquadron: $("incSquadron").checked,
       incGift: $("incGift").checked,
@@ -162,8 +165,7 @@
       incSPAA: $("incSPAA").checked,
       incHelis: $("incHelis").checked,
       planeRole: $("planeRole").value,
-      levelBombersCAS: $("levelBombersCAS").checked,
-      diveBombersCAS: $("diveBombersCAS").checked,
+      casType: $("casType").value,
       incPremium: $("incPremium").checked,
       incSquadron: $("incSquadron").checked,
       incGift: $("incGift").checked,
@@ -194,8 +196,13 @@
     if (p.planeRole) $("planeRole").value = p.planeRole;
     setChk("incSPAA", p.incSPAA);
     setChk("incHelis", p.incHelis);
-    setChk("levelBombersCAS", p.levelBombersCAS);
-    setChk("diveBombersCAS", p.diveBombersCAS);
+    // Prefer the new dropdown value; migrate old level/dive checkbox prefs so a
+    // returning user keeps their bomber-CAS choice.
+    if (p.casType) $("casType").value = p.casType;
+    else if (p.levelBombersCAS || p.diveBombersCAS) {
+      $("casType").value = (p.levelBombersCAS && p.diveBombersCAS) ? "both"
+        : p.diveBombersCAS ? "dive" : "level";
+    }
     setChk("incPremium", p.incPremium);
     setChk("incSquadron", p.incSquadron);
     setChk("incGift", p.incGift);
@@ -332,6 +339,9 @@
       result.used.delete(slot.unit.id);
       result.used.add(cand.id);
       slot.unit = cand;
+      // Recompute health — queue BR, competitive respawns and avg BR all depend
+      // on which vehicles are in the lineup, so a swap can change them.
+      result.health = LINEUP.assess(result.slots, options);
       renderResult(result, options); // re-render so every slot's "N more" stays correct
       return;
     }

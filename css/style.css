@@ -160,6 +160,14 @@ select:focus, input:focus { outline: none; border-color: var(--gold-dim); }
 .segmented button:last-child { border-right: none; }
 .segmented button.active { background: var(--gold-dim); color: #fff; font-weight: 600; }
 
+#bombersOnlyWrap { margin-top: 10px; }
+.cas-label {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+
 .playstyles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 
 .ps-card {

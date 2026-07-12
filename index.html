@@ -70,8 +70,13 @@
           <option value="none">🚫 No aircraft</option>
         </select>
         <div id="bombersOnlyWrap">
-          <label class="check"><input type="checkbox" id="levelBombersCAS"> Only use level bombers for CAS <span class="hint">(high-alt strategic bombers)</span></label>
-          <label class="check"><input type="checkbox" id="diveBombersCAS"> Only use dive bombers for CAS <span class="hint">(Stuka-style, dive on target)</span></label>
+          <label for="casType" class="cas-label">Restrict CAS to</label>
+          <select id="casType">
+            <option value="any" selected>Any attacker (default)</option>
+            <option value="dive">Dive bombers only — Stuka-style, dive on target</option>
+            <option value="level">Level bombers only — high-alt strategic</option>
+            <option value="both">Any bomber — dive or level</option>
+          </select>
         </div>
         <p class="hint">Fighters ranked by turn time; ground pounders by bomb/rocket payload.</p>
       </div>

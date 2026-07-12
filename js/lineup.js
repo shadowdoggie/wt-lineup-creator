@@ -340,5 +340,7 @@ const LINEUP = (() => {
     return { topBR, avgBR, targetBR: o.targetBR, core, ballast, total: coreTotal, hasSPAA, hasAir, verdict, notes };
   }
 
-  return { generate, BR_WINDOW };
+  // assess is exported so the UI can recompute lineup health after a per-slot
+  // swap changes which vehicles are in the lineup.
+  return { generate, assess, BR_WINDOW };
 })();
