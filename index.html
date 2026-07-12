@@ -171,16 +171,17 @@
 
 <div class="loading-overlay" id="loadingOverlay">
   <div class="loading-box">
-    <div class="spinner"></div>
-    <h2>Downloading game data</h2>
-    <p class="hint">~4 MB from the War Thunder datamine mirror — cached afterwards</p>
-    <ul class="load-steps">
+    <div class="spinner" id="loadSpinner"></div>
+    <h2 id="loadTitle">Downloading game data</h2>
+    <p class="hint" id="loadHint">~4 MB from the War Thunder datamine mirror — cached afterwards</p>
+    <ul class="load-steps" id="loadSteps">
       <li id="step-wpcost">Battle ratings &amp; economy</li>
       <li id="step-unittags">Vehicle classes &amp; armor</li>
       <li id="step-names">Vehicle names</li>
       <li id="step-shop">Shop availability</li>
     </ul>
     <p class="load-error" id="loadError" hidden></p>
+    <button type="button" class="generate-btn load-retry" id="retryBtn" hidden>Retry download</button>
   </div>
 </div>
 

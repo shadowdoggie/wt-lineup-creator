@@ -781,6 +781,7 @@ input:focus {
 .load-steps li.done::before { background: var(--green); border-color: var(--green); }
 
 .load-error { margin-top: 14px; color: var(--red); max-width: 340px; font-size: 0.85rem; line-height: 1.5; }
+.load-retry { margin-top: 16px; width: auto; padding: 9px 22px; font-size: 1rem; letter-spacing: 1.5px; }
 
 /* ---------- Footer ---------- */
 

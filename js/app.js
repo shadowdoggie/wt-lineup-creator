@@ -45,8 +45,15 @@
     const overlay = $("loadingOverlay");
     const errEl = $("loadError");
     overlay.hidden = false;
+    // Reset to the "downloading" state (a previous attempt may have left the
+    // overlay in its error state with the retry button showing).
     errEl.hidden = true;
-    for (const k of ["wpcost", "unittags", "names"]) $("step-" + k).classList.remove("done");
+    $("retryBtn").hidden = true;
+    $("loadSpinner").hidden = false;
+    $("loadSteps").hidden = false;
+    $("loadHint").hidden = false;
+    $("loadTitle").textContent = "Downloading game data";
+    for (const k of ["wpcost", "unittags", "names", "shop"]) $("step-" + k)?.classList.remove("done");
     try {
       const res = await WT_DATA.load({
         force,
@@ -60,9 +67,17 @@
       renderDataWarnings(res.dataWarnings);
       refreshBROptions();
     } catch (err) {
+      // Put the overlay into an actionable error state: stop the spinner, hide
+      // the step list, and surface a Retry button *inside* the overlay (the
+      // header Refresh sits underneath it and can't be clicked).
+      $("loadSpinner").hidden = true;
+      $("loadSteps").hidden = true;
+      $("loadHint").hidden = true;
+      $("loadTitle").textContent = "Download failed";
       errEl.textContent = "Could not download game data: " + err.message +
-        " — check your internet connection, then hit Refresh.";
+        " — check your internet connection, then retry.";
       errEl.hidden = false;
+      $("retryBtn").hidden = false;
       $("dataStatusText").textContent = "No data";
     } finally {
       loading = false;
@@ -112,9 +127,12 @@
     // is consumed; after that we just preserve the current selection.
     const prev = state.desiredBR != null ? state.desiredBR : parseFloat(sel.value);
     state.desiredBR = null;
+    // Only main ground vehicles set the target — SPAA are type "tank" too, so a
+    // BR that exists only for an SPAA would otherwise be selectable and build a
+    // lineup with no actual tanks.
     const brs = new Set();
     for (const u of state.units) {
-      if (u.country === nationId() && u.type === "tank" && u.br[state.mode] != null) {
+      if (u.country === nationId() && u.type === "tank" && u.cls !== "spaa" && u.br[state.mode] != null) {
         brs.add(u.br[state.mode]);
       }
     }
@@ -143,7 +161,7 @@
       incPremium: $("incPremium").checked,
       incSquadron: $("incSquadron").checked,
       incGift: $("incGift").checked,
-      playstyle: document.querySelector('input[name="playstyle"]:checked').value,
+      playstyle: document.querySelector('input[name="playstyle"]:checked')?.value || "balanced",
     };
   }
 
@@ -413,6 +431,7 @@
     });
 
     $("refreshBtn").addEventListener("click", () => loadData(true));
+    $("retryBtn").addEventListener("click", () => loadData(true));
 
     loadData(false);
   }

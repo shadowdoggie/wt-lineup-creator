@@ -24,8 +24,8 @@ const LINEUP = (() => {
     },
     speed: {
       classW: { light: 1.0, medium: 0.85, td: 0.5, heavy: 0.1 },
-      // 85% hp/ton + 15% reverse speed (peaking ridgelines) + 15% turret
-      // traverse (reactive flanking). Reverse and turret are smaller nudge.
+      // 70% hp/ton + 15% reverse speed (peaking ridgelines) + 15% turret
+      // traverse (reactive flanking). Reverse and turret are smaller nudges.
       stat: (u, p) => 0.7 * p.mobPct(u) + 0.15 * p.revPct(u) + 0.15 * p.turretPct(u),
     },
     sniper: {
@@ -281,7 +281,21 @@ const LINEUP = (() => {
       ...take(pools.heli, heliN, "heli"),
     ];
 
+    // Backfill: a support role can come up short — most commonly balanced air
+    // in a bracket with only one aircraft, where the fighter pick consumes it
+    // and the attacker pick finds nothing distinct left. Rather than return
+    // fewer vehicles than the requested crew slots, top up with the next-best
+    // ground vehicles so the lineup is always full when the bracket allows.
+    const airWanted = fighterN + attackerN + heliN;
+    const airGot = slots.filter(s => ["fighter", "attacker", "heli"].includes(s.category)).length;
+    if (slots.length < o.slots) {
+      slots.push(...takeGround(o.slots - slots.length));
+    }
+
     // --- warnings ---
+    if (airGot < airWanted) {
+      warnings.push(`Only ${airGot} of ${airWanted} aircraft slot(s) could be filled from this bracket — the rest went to ground vehicles.`);
+    }
     const groundGot = slots.filter(s => s.category === "ground").length;
     if (groundGot < groundCount) {
       warnings.push(`Only ${groundGot} ground vehicle(s) available in this BR bracket — try a different BR or enable more vehicle sources.`);

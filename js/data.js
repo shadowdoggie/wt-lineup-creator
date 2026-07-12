@@ -144,13 +144,26 @@ const WT_DATA = (() => {
     return id.replace(/^(us|germ|ussr|uk|jp|cn|it|fr|sw|il)_/, "").replace(/_/g, " ");
   }
 
+  // War Thunder prefixes ~500 display names with private UI "marker" glyphs
+  // (e.g. `▃Skink`, `▄M44`, `☢IL-28`, a U+F059 PUA tag). The game's own font
+  // draws these as little rank/premium/trophy tags, but a normal web font shows
+  // tofu boxes. Strip them wherever they appear (a few names use one mid-string
+  // as a separator, e.g. `Challe's ▄Yak-9T` / `F-86F-40 ▅`), then tidy spacing.
+  // These blocks — control pictures, box-drawing, block/geometric shapes, misc
+  // symbols/dingbats, arrows, and the Private Use Area — never occur in a real
+  // Latin vehicle name, so removing them is safe.
+  const NAME_MARKERS = /[​←-➿⬀-⯿-]/g;
+  function cleanName(s) {
+    return s.replace(NAME_MARKERS, "").replace(/\s{2,}/g, " ").trim();
+  }
+
   // units.csv: `"<id>";"<English>";...` — we only need the `<unit>_shop` rows.
   function parseNames(csv) {
     const names = {};
     const re = /^"((?:[^"]|"")+_shop)";"((?:[^"]|"")*)"/;
     for (const line of csv.split("\n")) {
       const m = re.exec(line);
-      if (m) names[m[1].slice(0, -5)] = m[2].replace(/""/g, '"');
+      if (m) names[m[1].slice(0, -5)] = cleanName(m[2].replace(/""/g, '"'));
     }
     return names;
   }

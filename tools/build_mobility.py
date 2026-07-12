@@ -74,8 +74,9 @@ ARMOR_OUT = os.path.join(os.path.dirname(os.path.abspath(MOBILITY_OUT)), "armor.
 
 # Kinetic armour-piercing shell family (apbc / apcbc / aphebc / apcr / apds /
 # apfsds). Excludes heat / he / smoke / shrapnel — chemical and filler rounds
-# aren't what a sniping gun is judged on.
-AP_RE = re.compile(r"ap", re.I)
+# aren't what a sniping gun is judged on. Anchored to a word start so a
+# bulletType like "napalm_tank" can't match on its embedded "ap".
+AP_RE = re.compile(r"\bap", re.I)
 
 # Gun caliber embedded in a weapon .blk filename, e.g. "23mm_2A7_user_cannon"
 # or the underscore-decimal "37mm" / "12_7mm". Reading it off the name avoids
@@ -566,6 +567,16 @@ def _stabilized(model):
     return False
 
 
+def _is_ir_nv_key(k):
+    """True if a nightVision sub-block key denotes IR / night-vision optics.
+    'ir' is matched only as a standalone token so 'air', 'mirror', 'third',
+    'direction' etc. don't false-positive a tank into having night vision."""
+    kl = k.lower()
+    if "night" in kl or "infrared" in kl:
+        return True
+    return re.search(r"(?<![a-z])ir(?![a-z])", kl) is not None
+
+
 def _night_vision(model):
     """Returns (thermal, nv): thermal=True if the tank has thermal imaging,
     nv=True if it has any night vision (IR or thermal). WWII tanks have no
@@ -583,7 +594,7 @@ def _night_vision(model):
             if "thermal" in k.lower():
                 thermal = True
                 nv = True
-            elif "ir" in k.lower() or "night" in k.lower():
+            elif _is_ir_nv_key(k):
                 nv = True
         if thermal or nv:
             return thermal, nv
@@ -604,7 +615,7 @@ def _night_vision(model):
                         if "thermal" in k.lower():
                             thermal = True
                             nv = True
-                        elif "ir" in k.lower() or "night" in k.lower():
+                        elif _is_ir_nv_key(k):
                             nv = True
                     if thermal or nv:
                         return thermal, nv
