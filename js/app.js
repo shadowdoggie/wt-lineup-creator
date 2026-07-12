@@ -50,7 +50,7 @@
     try {
       const res = await WT_DATA.load({
         force,
-        onStep: k => $("step-" + k).classList.add("done"),
+        onStep: k => { const el = $("step-" + k); if (el) el.classList.add("done"); },
       });
       state.units = res.units;
       state.fetchedAt = res.fetchedAt;
