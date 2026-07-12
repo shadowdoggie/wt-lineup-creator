@@ -41,11 +41,15 @@ const WT_DATA = (() => {
   // Cache key is derived from a fingerprint of the fields buildUnits emits, so
   // any change to the unit shape automatically invalidates stale caches — no
   // more remembering to bump a manual "_v2". Add new fields to this string.
+  // Also bump the trailing sentinel when the *format* of a cached value changes
+  // without its field name changing (e.g. name-marker stripping below), so
+  // already-cached clients re-parse instead of serving the old-format value.
   const SCHEMA = "id name country type cls diveBomber rank br premium squadron gift " +
     "researchPoints armorHull armorTurret effArmor stabilized thermal nv revRatio " +
     "hpPerTon gunVel gunCal gunPen turnTime maxSpeed climbRate " +
     "crewCount reloadTime turretSpeed " +
-    "ordnanceKg atgm atgmRange sam radar aaCal";
+    "ordnanceKg atgm atgmRange sam radar aaCal " +
+    "fmt:name-markers-stripped";
   function hash32(s) {
     let h = 2166136261;
     for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
