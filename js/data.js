@@ -740,7 +740,7 @@ const WT_DATA = (() => {
     const br = u.br && u.br[mode] != null ? u.br[mode] : 0;
     const side = u.armorSide || 0;
     const DONT = (why, tip) => ({ angle: false, verdict: "Don't angle", why, tip });
-    const DO = (why, tip) => ({ angle: true, verdict: "Angle ~30°", why, tip });
+    const DO = (why, tip) => ({ angle: true, verdict: "Angle", why, tip });
 
     // 1) SPAA — thin all over; a flank shot is instant death.
     if (u.cls === "spaa")
