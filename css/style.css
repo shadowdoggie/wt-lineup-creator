@@ -742,6 +742,40 @@ input:focus {
 }
 .veh-meta .stat .ico { color: var(--text-faint); font-size: 0.82rem; }
 
+/* "Should I angle this tank?" advisor badge — full-width, glanceable in-match. */
+.angle-tag {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-bottom: 10px;
+  padding: 6px 9px;
+  border-radius: 5px;
+  font-size: 0.78rem;
+  line-height: 1.25;
+  border: 1px solid var(--angle-color);
+  background: color-mix(in srgb, var(--angle-color) 13%, transparent);
+  cursor: help;
+}
+.angle-tag .angle-ico {
+  font-size: 0.9rem;
+  line-height: 1;
+  color: var(--angle-color);
+  transform: translateY(1px);
+}
+.angle-tag .angle-verdict {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  color: var(--angle-color);
+  white-space: nowrap;
+}
+.angle-tag .angle-why {
+  color: var(--text-dim);
+  font-size: 0.72rem;
+}
+.angle-yes { --angle-color: #7bbf5a; }  /* green — do it */
+.angle-no  { --angle-color: #8794a3; }  /* muted slate — stay flat */
+
 .br-chip {
   font-family: var(--font-display);
   font-size: 0.95rem;

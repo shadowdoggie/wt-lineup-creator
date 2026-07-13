@@ -507,6 +507,12 @@ def _armor_stats_from_model(model):
     steel_raw = {"hull": 0.0, "turret": 0.0}   # display mm (plate as modeled)
     steel_eff = {"hull": 0.0, "turret": 0.0}   # × genericArmorQuality
     comp_eff = {"hull": 0.0, "turret": 0.0}    # best single composite item
+    # Thickest real hull-side plate (mm). Feeds the client "should I angle?"
+    # advisor: angling only pays when the flank you turn toward the enemy can
+    # survive being shot. Turret sides, tracks/wheels and thin skirts/fenders
+    # (<20mm) are excluded — they aren't the main flank you present when
+    # sidescraping.
+    hull_side = 0.0
 
     def add_comp(target, t, gq):
         q = gq if isinstance(gq, (int, float)) and gq > 0 else 1.0
@@ -530,6 +536,13 @@ def _armor_stats_from_model(model):
             if not isinstance(t, (int, float)) or t <= 0:
                 continue
             k2l = k2.lower()
+            # Capture the main hull-side plate before discarding flank plates
+            # (front-armor scan skips them). Turret sides don't count — the
+            # angling advice is about the hull flank you expose when turning.
+            if ("side" in k2l and "turret" not in kl and "mask" not in kl
+                    and "turret" not in k2l and "track" not in k2l
+                    and "wheel" not in k2l and t >= 20):
+                hull_side = max(hull_side, t)
             # Roof/floor/flank plates never count toward frontal protection.
             if "top" in k2l or "bottom" in k2l or "side" in k2l:
                 continue
@@ -579,6 +592,7 @@ def _armor_stats_from_model(model):
     return {
         "h": round(steel_raw["hull"], 1),
         "t": round(steel_raw["turret"], 1),
+        "hs": round(hull_side, 1),
         "eff": round(eff),
         "era": 1 if n_era > 0 else 0,
         "comp": 1 if has_comp else 0,
@@ -900,11 +914,13 @@ def main():
     stab_n = sum(1 for v in armor.values() if v.get("stab"))
     al_n = sum(1 for v in armor.values() if v.get("al"))
     eff_n = sum(1 for v in armor.values() if v.get("eff"))
+    hs_n = sum(1 for v in armor.values() if v.get("hs"))
     _guard_field_regression("armor/thermal", "thermal", thermal_n, ARMOR_OUT)
     _guard_field_regression("armor/nv", "nv", nv_n, ARMOR_OUT)
     _guard_field_regression("armor/stab", "stab", stab_n, ARMOR_OUT)
     _guard_field_regression("armor/al", "al", al_n, ARMOR_OUT)
     _guard_field_regression("armor/eff", "eff", eff_n, ARMOR_OUT)
+    _guard_field_regression("armor/hs", "hs", hs_n, ARMOR_OUT)
 
     _atomic_write(MOBILITY_OUT, dict(sorted(mobility.items())))
     _atomic_write(GUNSTATS_OUT, dict(sorted(guns.items())))

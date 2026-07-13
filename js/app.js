@@ -289,6 +289,21 @@
     ].join(" ");
   }
 
+  // In-match "should I angle this tank?" badge. Ground vehicles only; the
+  // advisor (WT_DATA.angleAdvice) returns null for aircraft/helis.
+  function angleBadge(unit, mode) {
+    const adv = WT_DATA.angleAdvice(unit, mode);
+    if (!adv) return "";
+    const key = adv.angle ? "yes" : "no";
+    const ico = adv.angle ? "◣" : "▮";
+    return `
+      <div class="angle-tag angle-${key}" title="${esc(adv.tip)}">
+        <span class="angle-ico" aria-hidden="true">${ico}</span>
+        <span class="angle-verdict">${esc(adv.verdict)}</span>
+        <span class="angle-why">${esc(adv.why)}</span>
+      </div>`;
+  }
+
   function slotCard(slot, i, mode, result) {
     const meta = badgeFor(slot);
     const pool = result.pools[slot.category] || [];
@@ -301,6 +316,7 @@
         </div>
         <div class="veh-name">${esc(slot.unit.name)} ${srcBadges(slot.unit)}</div>
         <div class="veh-meta">${metaBits(slot, mode)}</div>
+        ${angleBadge(slot.unit, mode)}
         <button type="button" class="swap-btn" data-slot="${i}" ${alts ? "" : "disabled"}
           title="Swap for the next-best ${meta.label.toLowerCase()} (respects your playstyle)">
           ${ico("i-swap")} Swap${alts ? ` <span class="alt-count">${alts} more</span>` : ` <span class="alt-count">none left</span>`}

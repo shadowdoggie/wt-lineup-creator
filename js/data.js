@@ -45,13 +45,13 @@ const WT_DATA = (() => {
   // without its field name changing (e.g. name-marker stripping below), so
   // already-cached clients re-parse instead of serving the old-format value.
   const SCHEMA = "id name country type cls diveBomber rank br premium squadron gift " +
-    "researchPoints armorHull armorTurret armorEff hasEra hasComposite autoLoader " +
+    "researchPoints armorHull armorTurret armorSide armorEff hasEra hasComposite autoLoader " +
     "stabPlanes stabilized thermal thermalGen nv revRatio " +
     "hpPerTon gunVel gunCal gunPen gunPenSrc turnTime maxSpeed climbRate " +
     "crewCount reloadTime turretSpeed " +
     "ordnanceKg atgm atgmQuality atgmRange aam arh sarh aamQuality cm " +
     "sam samRange radar radarSearch radarRange gunAmmo aaCal " +
-    "fmt:hybrid-pen-table|est;armor:steel+flags+eff;reload:al-flag;air:aam-quality+guid-by-name;spaa:range+radar";
+    "fmt:hybrid-pen-table|est;armor:steel+side+flags+eff;reload:al-flag;air:aam-quality+guid-by-name;spaa:range+radar;angle-advice-v1";
   function hash32(s) {
     let h = 2166136261;
     for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
@@ -400,6 +400,7 @@ const WT_DATA = (() => {
         gift: !!(w.gift || w.event || w.showOnlyWhenBought),
         armorHull: Array.isArray(shop.armorThicknessHull) ? shop.armorThicknessHull[0] : null,
         armorTurret: Array.isArray(shop.armorThicknessTurret) ? shop.armorThicknessTurret[0] : null,
+        armorSide: 0,        // armor.json — thickest hull-side plate (mm); feeds the angling advisor
         armorEff: null,      // armor.json — ranking-only protection score (never shown as mm)
         hasEra: false,       // armor.json — ERA tiles present in model
         hasComposite: false, // armor.json — composite/NERA arrays present
@@ -604,6 +605,7 @@ const WT_DATA = (() => {
       if (!a) continue;
       if (a.h > 0) u.armorHull = a.h;
       if (a.t > 0) u.armorTurret = a.t;
+      if (a.hs > 0) u.armorSide = a.hs;
       if (a.eff > 0) u.armorEff = a.eff;
       u.hasEra = !!a.era;
       u.hasComposite = !!a.comp;
@@ -710,5 +712,77 @@ const WT_DATA = (() => {
     }
   }
 
-  return { NATIONS, load, econToBR };
+  // --- "Should I angle this tank?" advisor ---------------------------------
+  // A foolproof, in-match yes/no for every ground vehicle. The rule the advice
+  // encodes (distilled from real WT armor mechanics):
+  //   Angle ONLY when the front is a flat box AND the sides are thick enough to
+  //   survive being turned toward the enemy — otherwise stay flat / hull-down.
+  // The danger is asymmetric: telling a player to angle when they shouldn't
+  // exposes a weak flank = a guaranteed kill, while "don't angle" is at worst
+  // mildly suboptimal. So this biases hard toward DON'T ANGLE and only returns
+  // ANGLE for the narrow, unambiguous flat-front-heavy case.
+  //
+  // Front SLOPE is not in the game files (it lives in the 3D collision mesh),
+  // so flat-vs-sloped can't be read from data. We use hull-SIDE thickness (the
+  // half of the rule we *can* measure) plus a small list of famous sloped-front
+  // heavies whose thick sides would otherwise trip a false "angle".
+  const ANGLE_SIDE_MIN = 55;   // mm — thinner hull sides can't survive turning
+  const ANGLE_MODERN_BR = 8.0; // at/above this, APFSDS ignores angle bounce
+  // Sloped-front heavies (IS family, T-10, AMX-50, sloped "Object" heavies,
+  // Chinese WZ-111): thick-sided but their front is already strong flat-on, so
+  // angling is a downgrade. Matched as whole id tokens to avoid e.g. ZIS guns.
+  // Because a false "don't angle" is only mildly suboptimal while a false
+  // "angle" gets you killed, this list is deliberately generous — every postwar
+  // Soviet "Object" heavy is sloped/pike-nosed, so we veto the whole family
+  // rather than chase individual prototype numbers (248, 252U, 279, 770, …).
+  const ANGLE_SLOPED_FRONT = [
+    /(^|_)is_[1-7][a-z]?(_|$)/,  // IS-1/2/3/4/6/7 (incl. IS-4M etc.)
+    /(^|_)t_10[a-z]?(_|$)/,      // T-10 / T-10A / T-10M
+    /(^|_)amx_50/,              // AMX-50 series (sloped nose)
+    /object/,                  // Soviet "Object" heavies (248, 252U, 279, 770…)
+    /(^|_)wz111/,               // Chinese WZ-111 heavies
+  ];
+
+  // Returns { angle: bool, verdict: string, why: string, tip: string } for a
+  // ground vehicle, or null for aircraft/helis (no card badge there).
+  function angleAdvice(u, mode) {
+    if (!u || u.type !== "tank") return null;
+    const br = u.br && u.br[mode] != null ? u.br[mode] : 0;
+    const side = u.armorSide || 0;
+    const DONT = (why, tip) => ({ angle: false, verdict: "Don't angle", why, tip });
+    const DO = (why, tip) => ({ angle: true, verdict: "Angle ~30°", why, tip });
+
+    // 1) SPAA — thin all over; a flank shot is instant death.
+    if (u.cls === "spaa")
+      return DONT("thin all over",
+        "SPAA has paper armour everywhere. Never present a flank — hide, dodge, and shoot from cover or behind your team.");
+    // 2) Top tier / modern — APFSDS darts drill through the extra angle and the
+    //    sides are paper. Positioning replaces armour here.
+    if (u.hasComposite || br >= ANGLE_MODERN_BR)
+      return DONT("darts ignore angle",
+        "Top tier: modern APFSDS punches straight through angled plate and your sides are thin. Stay flat, go hull-down, and use gun depression instead.");
+    // 3) Casemate / turretless TDs — keep the thick front square to the enemy.
+    if (u.cls === "td")
+      return DONT("keep front to enemy",
+        "Casemate / turretless: your protection is all up front. Keep it square to the enemy and use terrain — turning only shows a weak side.");
+    // 4) Known sloped-front heavy — front is already strong flat-on, so turning
+    //    trades a plate that works for a worse one.
+    if (ANGLE_SLOPED_FRONT.some(re => re.test(u.id)))
+      return DONT("front already sloped",
+        "This hull's front is already well sloped and strong head-on. Angling only exposes a weaker side — stay flat or go hull-down.");
+    // 5) Thin sides — the flank can't take the exposure at any useful angle.
+    if (side > 0 && side < ANGLE_SIDE_MIN)
+      return DONT("sides too thin",
+        `Hull sides are only ~${Math.round(side)}mm. Turning shows a plate that won't hold — stay flat and let terrain or a hull-down spot do the work.`);
+    // 6) Flat-front heavy with thick sides — the classic sidescraper.
+    if (u.cls === "heavy" && side >= ANGLE_SIDE_MIN)
+      return DO(`thick ${Math.round(side)}mm sides`,
+        `Flat, thick front + ~${Math.round(side)}mm sides. Angle ~30° (sidescrape behind cover) so shots glance off both plates. Don't over-turn past ~45°.`);
+    // 7) Everything else (mediums, lights, unknown) — flat is safe; angling a
+    //    thin/medium hull just hands the enemy a weak spot.
+    return DONT("stay flat, use terrain",
+      "Angling won't meaningfully help this hull. Stay flat, keep moving, and use terrain and hull-down positions rather than your armour.");
+  }
+
+  return { NATIONS, load, econToBR, angleAdvice };
 })();
