@@ -26,7 +26,6 @@
   };
 
   const state = { units: [], mode: "realistic", fetchedAt: null, desiredBR: null };
-  let armorLineups = null; // lazy cache for the fixed best-armor list; reset on data (re)load
   let current = null; // { result, options } — kept so swaps can mutate the lineup
   let loading = false; // guards against overlapping downloads (e.g. Refresh spam)
 
@@ -67,10 +66,6 @@
       renderDataStatus(res);
       renderDataWarnings(res.dataWarnings);
       refreshBROptions();
-      // New vehicle data invalidates the fixed best-armor list; re-render it
-      // now if that view is the one on screen.
-      armorLineups = null;
-      if (!$("armorView").hidden) renderArmorView();
     } catch (err) {
       // Put the overlay into an actionable error state: stop the spinner, hide
       // the step list, and surface a Retry button *inside* the overlay (the
@@ -394,71 +389,6 @@
     }
   }
 
-  /* ---------- best armor lineups view ---------- */
-
-  // Fixed card: no swap button, no slot number, and — like the builder cards —
-  // no stat labels. Just BR, class badge, name and the angling verdict.
-  function armorCard(u, mode) {
-    const meta = CLS_META[u.cls] || { label: u.cls.toUpperCase(), color: "var(--text-dim)" };
-    return `
-      <div class="slot-card armor-card" style="--cls-color:${meta.color}">
-        <div class="slot-head">
-          <span class="cls-badge">${meta.label}</span>
-        </div>
-        <div class="veh-name">${esc(u.name)}</div>
-        <div class="veh-meta"><span class="br-chip">${u.br[mode].toFixed(1)}</span></div>
-        ${angleBadge(u, mode)}
-      </div>`;
-  }
-
-  function nationLabel(id) {
-    return WT_DATA.NATIONS.find(n => n[0] === id)?.[1] || id;
-  }
-
-  function renderArmorView() {
-    const el = $("armorList");
-    if (!state.units.length) {
-      el.innerHTML = `<p class="pool-note">Waiting for game data…</p>`;
-      return;
-    }
-    if (!armorLineups) armorLineups = LINEUP.bestArmorLineups(state.units, state.mode);
-    if (!armorLineups.length) {
-      el.innerHTML = `<p class="pool-note">No armor data available — check the data warnings above.</p>`;
-      return;
-    }
-    // Grouped by nation (tech-tree order), then BR ascending within each
-    // nation — so you can read your own nation's armor peaks top to bottom.
-    const byNation = new Map();
-    for (const entry of armorLineups) {
-      if (!byNation.has(entry.nation)) byNation.set(entry.nation, []);
-      byNation.get(entry.nation).push(entry);
-    }
-    const nationOrder = WT_DATA.NATIONS.map(n => n[0]).filter(id => byNation.has(id));
-    el.innerHTML = nationOrder.map(nation => `
-      <section class="ba-nation">
-        <h3 class="ba-nation-title">${esc(nationLabel(nation))}</h3>
-        ${byNation.get(nation).map(entry => `
-          <div class="ba-entry">
-            <div class="ba-head">
-              <span class="ba-br">BR ${entry.br.toFixed(1)}</span>
-              <span class="tag">${entry.slots.length} vehicles</span>
-            </div>
-            <div class="lineup-grid ba-grid">
-              ${entry.slots.map(u => armorCard(u, state.mode)).join("")}
-            </div>
-          </div>`).join("")}
-      </section>`).join("");
-  }
-
-  function switchView(view) {
-    const armor = view === "armor";
-    $("builderView").hidden = armor;
-    $("armorView").hidden = !armor;
-    $("tabBuilder").classList.toggle("active", !armor);
-    $("tabArmor").classList.toggle("active", armor);
-    if (armor) renderArmorView();
-  }
-
   /* ---------- events ---------- */
 
   function init() {
@@ -494,9 +424,6 @@
       const btn = e.target.closest(".swap-btn");
       if (btn && !btn.disabled) swapSlot(parseInt(btn.dataset.slot, 10));
     });
-
-    $("tabBuilder").addEventListener("click", () => switchView("builder"));
-    $("tabArmor").addEventListener("click", () => switchView("armor"));
 
     $("refreshBtn").addEventListener("click", () => loadData(true));
     $("retryBtn").addEventListener("click", () => loadData(true));
