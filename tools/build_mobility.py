@@ -83,6 +83,98 @@ _mods_by_id = {}
 # Which tank ids are SPAA (from unittags). Only these get an spaa.json entry.
 _spaa_ids = set()
 
+# Heavy-tank ids (from unittags), for the post-build angling-data audit: a
+# heavy with no measured hull side is exactly the gap that hid the Churchill
+# bug, so every one of them is listed loudly after each build.
+_heavy_ids = set()
+
+# Sloped-or-already-strong fronts: heavies whose FRONT is already effective
+# head-on (well-sloped glacis, pike nose, or plain immune), so angling only
+# trades a working plate for a weaker side. Front slope is NOT in the datamine
+# (it lives in the 3D collision mesh), so this knowledge list is the one
+# hand-curated piece of the angling advisor — kept HERE, next to the data
+# build, as the single source of truth (the site reads the baked `ang` flag,
+# never its own list). A false "don't angle" is mildly suboptimal; a false
+# "angle" is a death sentence — so when in doubt a tank belongs on this list.
+_NO_ANGLE_RE = [
+    re.compile(r"(^|_)is_[1-7]\w*"),   # IS-1…IS-7 — sloped/pike Soviet heavies
+    re.compile(r"(^|_)t_10"),          # T-10 family — IS-lineage pike nose
+    re.compile(r"amx_50|amx50"),       # AMX-50 — sloped nose
+    re.compile(r"object"),             # Soviet "Object" heavies (248/279/770…)
+    re.compile(r"wz_?111"),            # Chinese WZ-111 — IS-3-style pike
+    re.compile(r"sherman_jumbo|m4a3e2"),  # Jumbo — 47deg glacis, keep square
+    re.compile(r"(^|_)t14(_|$)"),      # US T14 — sloped glacis
+    re.compile(r"(^|_)t26e"),          # T26E5/Super Pershing — sloped glacis
+    re.compile(r"(^|_)t(29|30|32|34)"),  # US T29/30/32/34 (+captured T34s) —
+                                         # sloped glacis, hull-down turrets
+    re.compile(r"m6a2e1"),             # M6A2E1 — front already immune
+    re.compile(r"arl_44"),             # ARL-44 — 120mm well-sloped UFP
+]
+
+# Hull sides thinner than this can't survive being turned toward the enemy.
+_ANGLE_SIDE_MIN = 55.0
+
+
+def _angle_ok(uid, hs, comp):
+    """The baked should-angle eligibility flag: heavy tank, thick measured
+    hull sides, no composite (angling died with APFSDS), and a front that is
+    NOT already sloped/strong. The site applies its own BR/mode gates on top;
+    this flag is the only place the flat-front judgement lives."""
+    if uid not in _heavy_ids or comp:
+        return False
+    if hs < _ANGLE_SIDE_MIN:
+        return False
+    uid_l = uid.lower()
+    return not any(rx.search(uid_l) for rx in _NO_ANGLE_RE)
+
+
+# Ground-truth armor values, checked after every build and FATAL on mismatch.
+# These are famous, hand-verified plates that the game has kept stable for
+# years — if extraction ever misfiles them again (the Churchill's
+# `hull_turret_rha` container sent its 95mm sides to the turret), the build
+# aborts instead of shipping silently-wrong angling advice. Ranges, not exact
+# values, so a minor Gaijin rebalance doesn't false-alarm.
+_CANON_HS = {
+    # id: (min_mm, max_mm, should_angle) — thickest hull-side plate `hs` range
+    # plus the expected baked angling verdict. The verdict column IS the
+    # feature's spec: poster-children anglers must stay 1, famous
+    # sloped/thin/modern cases must stay 0.
+    "germ_pzkpfw_VI_ausf_e_tiger":     (60, 100, 1),   # Tiger I ~80 — angle
+    "germ_pzkpfw_VI_ausf_b_tiger_IIh": (60, 100, 1),   # Tiger II ~80 — angle
+    "uk_a_22f_mk_7_churchill_1944":    (80, 110, 1),   # Churchill VII ~95 — angle
+    "uk_a_22_mk_1_churchill_1941":     (55, 100, 1),   # Churchill I ~63.5 — angle
+    "ussr_kv_1_zis_5":                 (60, 90, 1),    # KV-1 ~75 — angle
+    "germ_pzkpfw_V_ausf_d_panther":    (30, 54, 0),    # Panther ~40 — thin sides
+    "ussr_is_2_1944":                  (80, 100, 0),   # IS-2 ~90 — sloped front
+    "ussr_t_34_85_zis_53":             (35, 54, 0),    # T-34-85 ~45 — thin+sloped
+    "us_m4a3e2_sherman_jumbo":         (60, 90, 0),    # Jumbo — 47° glacis
+    "us_t32":                          (60, 90, 0),    # T32 — sloped glacis
+    "ussr_t_80u":                      (60, 100, 0),   # T-80U — composite/top tier
+}
+
+
+def _guard_canon_hs(armor):
+    """Abort the build if any canonical hull-side value or baked angling
+    verdict disagrees with ground truth — wrong data here turns into wrong
+    (possibly fatal) angling advice on the site, so fail loud here and on
+    the VPS cron rather than ship it."""
+    errors = []
+    for uid, (lo, hi, want_ang) in _CANON_HS.items():
+        row = armor.get(uid)
+        if row is None:
+            errors.append(f"{uid}: missing from armor build entirely")
+            continue
+        hs = row.get("hs", 0)
+        if not (lo <= hs <= hi):
+            errors.append(f"{uid}: hs={hs} outside known-truth range [{lo}, {hi}]")
+        if row.get("ang", 0) != want_ang:
+            errors.append(f"{uid}: ang={row.get('ang')} expected {want_ang}")
+    if errors:
+        raise SystemExit(
+            "FATAL: canonical angling-armor check failed — refusing to write "
+            "armor.json:\n  " + "\n  ".join(errors)
+        )
+
 
 def get(url):
     req = urllib.request.Request(url, headers={"Accept-Encoding": "gzip"})
@@ -521,7 +613,25 @@ def _armor_stats_from_model(model):
     for key, blk in _iter_damage_parts(dp):
         kl = key.lower()
         cont_front = "front" in kl
-        cont_turret = "turret" in kl or "mask" in kl
+        # Hull/turret from the CONTAINER name is only a fallback — containers
+        # have free-form names ("hull", "inner_armor", "hull_turret_rha" on the
+        # Churchill…) while PLATE names are rigidly standardized across the
+        # whole datamine (body_*/superstructure_* = hull, turret_*/mask =
+        # turret). Substring tests on the container previously misfiled every
+        # plate of a mixed-name container: "turret" in "hull_turret_rha" sent
+        # the Churchill's 95mm hull sides to the turret and zeroed its `hs`.
+        cont_has_turret = "turret" in kl or "mask" in kl
+        cont_has_hull = "hull" in kl or "body" in kl or "superstructure" in kl
+        cont_turret = cont_has_turret and not cont_has_hull
+
+        def plate_target(k2l):
+            """hull|turret for one plate, by its OWN standardized name first."""
+            if "turret" in k2l or "mask" in k2l:
+                return "turret"
+            if "body" in k2l or "superstructure" in k2l or "hull" in k2l:
+                return "hull"
+            return "turret" if cont_turret else "hull"
+
         cont_composite = not _is_steel_class(blk.get("armorClass"))
         # Composite containers can carry their own thickness (rare).
         if _COMP_RE.search(key):
@@ -539,9 +649,11 @@ def _armor_stats_from_model(model):
             # Capture the main hull-side plate before discarding flank plates
             # (front-armor scan skips them). Turret sides don't count — the
             # angling advice is about the hull flank you expose when turning.
-            if ("side" in k2l and "turret" not in kl and "mask" not in kl
-                    and "turret" not in k2l and "track" not in k2l
-                    and "wheel" not in k2l and t >= 20):
+            # Classified by the plate's own name so container naming quirks
+            # can't hide a flank (the Churchill bug).
+            if ("side" in k2l and plate_target(k2l) == "hull"
+                    and "track" not in k2l and "wheel" not in k2l
+                    and "skirt" not in k2l and t >= 20):
                 hull_side = max(hull_side, t)
             # Roof/floor/flank plates never count toward frontal protection.
             if "top" in k2l or "bottom" in k2l or "side" in k2l:
@@ -555,7 +667,7 @@ def _armor_stats_from_model(model):
             # the backing plate of a frontal array, e.g. T-80UD's 250mm CHA).
             if "back" in k2l and not cont_front:
                 continue
-            target = "turret" if ("turret" in k2l or "mask" in k2l or cont_turret) else "hull"
+            target = plate_target(k2l)
             gq = v2.get("genericArmorQuality")
             plate_is_composite = (
                 (is_comp_key and (not _is_steel_class(v2.get("armorClass"))
@@ -876,6 +988,9 @@ def main():
     _spaa_ids.update(
         k for k in tanks if unittags.get(k, {}).get("tags", {}).get("type_spaa")
     )
+    _heavy_ids.update(
+        k for k in tanks if unittags.get(k, {}).get("tags", {}).get("type_heavy_tank")
+    )
     print(f"{len(tanks)} tanks ({len(_spaa_ids)} SPAA) — fetching model + gun files…")
 
     mobility, guns, spaa, armor = {}, {}, {}, {}
@@ -889,6 +1004,9 @@ def main():
             if aa is not None:
                 spaa[uid] = aa
             if ar is not None:
+                # Bake the should-angle eligibility flag (see _angle_ok) so
+                # the site never needs its own flat-front knowledge list.
+                ar["ang"] = 1 if _angle_ok(uid, ar.get("hs", 0), ar.get("comp")) else 0
                 armor[uid] = ar
             if done % 200 == 0:
                 print(f"  {done}/{len(tanks)}")
@@ -921,6 +1039,29 @@ def main():
     _guard_field_regression("armor/al", "al", al_n, ARMOR_OUT)
     _guard_field_regression("armor/eff", "eff", eff_n, ARMOR_OUT)
     _guard_field_regression("armor/hs", "hs", hs_n, ARMOR_OUT)
+    ang_n = sum(1 for v in armor.values() if v.get("ang"))
+    _guard_field_regression("armor/ang", "ang", ang_n, ARMOR_OUT)
+    # Known-truth plate check — FATAL on mismatch (see _CANON_HS).
+    _guard_canon_hs(armor)
+    # Angling-data audit: every heavy tank with no measured hull side is a
+    # potential Churchill-class extraction gap. Listed loudly (not fatal —
+    # some heavies legitimately model armor oddly) so gaps can't hide.
+    heavies_no_hs = sorted(
+        uid for uid in _heavy_ids if not armor.get(uid, {}).get("hs")
+    )
+    if heavies_no_hs:
+        print(f"AUDIT: {len(heavies_no_hs)} heavy tanks with no hull-side plate "
+              f"(angling advice falls back to safe 'don't angle'):")
+        for uid in heavies_no_hs:
+            print(f"    {uid}")
+    # The complete roster of tanks eligible for the "Angle" verdict, printed
+    # every build (incl. the nightly cron log). This set is small and finite —
+    # any surprise entrant after a game patch shows up here for review before
+    # anyone trusts its advice.
+    ang_ids = sorted(uid for uid, v in armor.items() if v.get("ang"))
+    print(f"AUDIT: {len(ang_ids)} tanks carry the ANGLE verdict:")
+    for uid in ang_ids:
+        print(f"    {uid}  (hs={armor[uid].get('hs')})")
 
     _atomic_write(MOBILITY_OUT, dict(sorted(mobility.items())))
     _atomic_write(GUNSTATS_OUT, dict(sorted(guns.items())))
