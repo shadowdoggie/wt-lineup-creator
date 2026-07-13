@@ -264,7 +264,21 @@ body {
   max-width: 760px;
 }
 
-.ba-entry { margin-bottom: 26px; }
+.ba-nation { margin-bottom: 34px; }
+.ba-nation-title {
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  line-height: 1.1;
+  color: var(--gold);
+  margin-bottom: 12px;
+  padding-bottom: 6px;
+  border-bottom: 2px solid var(--gold-dim);
+}
+
+.ba-entry { margin-bottom: 22px; }
 .ba-head {
   display: flex;
   align-items: baseline;
@@ -273,14 +287,6 @@ body {
   margin-bottom: 10px;
   padding-bottom: 6px;
   border-bottom: 1px solid var(--line);
-}
-.ba-head h3 {
-  font-family: var(--font-display);
-  font-size: 1.3rem;
-  font-weight: 700;
-  letter-spacing: 0.8px;
-  text-transform: uppercase;
-  line-height: 1;
 }
 .ba-br {
   font-family: var(--font-display);
@@ -293,8 +299,6 @@ body {
   border-radius: 4px;
   padding: 1px 10px;
 }
-.ba-runnerup { color: var(--text-faint); font-size: 0.76rem; }
-
 .ba-grid { margin-bottom: 0; }
 .armor-card .veh-meta { margin-bottom: 0; }
 .armor-card .angle-tag { margin: 10px 0 0; }

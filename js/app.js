@@ -396,25 +396,17 @@
 
   /* ---------- best armor lineups view ---------- */
 
-  // Fixed card: no swap button, no slot number — this list is not editable.
-  // Armor figures shown are the factual steel plate thicknesses from the game
-  // files; the effective-protection score used for RANKING is internal and is
-  // never displayed (it isn't a real millimeter value).
+  // Fixed card: no swap button, no slot number, and — like the builder cards —
+  // no stat labels. Just BR, class badge, name and the angling verdict.
   function armorCard(u, mode) {
     const meta = CLS_META[u.cls] || { label: u.cls.toUpperCase(), color: "var(--text-dim)" };
-    const stat = (title, inner) => `<span class="stat" title="${esc(title)}">${inner}</span>`;
-    const bits = [`<span class="br-chip">${u.br[mode].toFixed(1)}</span>`];
-    if (u.armorHull != null) bits.push(stat("Thickest frontal hull plate (steel)", `Hull ${Math.round(u.armorHull)} mm`));
-    if (u.armorTurret != null) bits.push(stat("Thickest frontal turret plate (steel)", `Turret ${Math.round(u.armorTurret)} mm`));
-    if (u.hasComposite) bits.push(stat("Composite / NERA arrays in the armor model", "Composite"));
-    if (u.hasEra) bits.push(stat("Explosive reactive armor tiles in the model", "ERA"));
     return `
       <div class="slot-card armor-card" style="--cls-color:${meta.color}">
         <div class="slot-head">
           <span class="cls-badge">${meta.label}</span>
         </div>
         <div class="veh-name">${esc(u.name)}</div>
-        <div class="veh-meta">${bits.join(" ")}</div>
+        <div class="veh-meta"><span class="br-chip">${u.br[mode].toFixed(1)}</span></div>
         ${angleBadge(u, mode)}
       </div>`;
   }
@@ -434,17 +426,27 @@
       el.innerHTML = `<p class="pool-note">No armor data available — check the data warnings above.</p>`;
       return;
     }
-    el.innerHTML = armorLineups.map(entry => `
-      <section class="ba-entry">
-        <div class="ba-head">
-          <span class="ba-br">BR ${entry.br.toFixed(1)}</span>
-          <h3>${esc(nationLabel(entry.nation))}</h3>
-          <span class="tag">${entry.slots.length} vehicles</span>
-          ${entry.runnerUp ? `<span class="ba-runnerup">runner-up: ${esc(nationLabel(entry.runnerUp))}</span>` : ""}
-        </div>
-        <div class="lineup-grid ba-grid">
-          ${entry.slots.map(u => armorCard(u, state.mode)).join("")}
-        </div>
+    // Grouped by nation (tech-tree order), then BR ascending within each
+    // nation — so you can read your own nation's armor peaks top to bottom.
+    const byNation = new Map();
+    for (const entry of armorLineups) {
+      if (!byNation.has(entry.nation)) byNation.set(entry.nation, []);
+      byNation.get(entry.nation).push(entry);
+    }
+    const nationOrder = WT_DATA.NATIONS.map(n => n[0]).filter(id => byNation.has(id));
+    el.innerHTML = nationOrder.map(nation => `
+      <section class="ba-nation">
+        <h3 class="ba-nation-title">${esc(nationLabel(nation))}</h3>
+        ${byNation.get(nation).map(entry => `
+          <div class="ba-entry">
+            <div class="ba-head">
+              <span class="ba-br">BR ${entry.br.toFixed(1)}</span>
+              <span class="tag">${entry.slots.length} vehicles</span>
+            </div>
+            <div class="lineup-grid ba-grid">
+              ${entry.slots.map(u => armorCard(u, state.mode)).join("")}
+            </div>
+          </div>`).join("")}
       </section>`).join("");
   }
 

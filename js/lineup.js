@@ -493,22 +493,27 @@ const LINEUP = (() => {
   }
 
   // --- "Best armor lineups" (curated, fixed) -------------------------------
-  // For every ground BR step, find the single nation whose 5 best-armored
-  // ground vehicles in [BR-1.0, BR] beat every other nation's. Ground mains
-  // only (no SPAA / aircraft / helicopters), tech-tree only so anyone can
-  // grind the lineup, and no swapping — these are meant as a fixed answer to
-  // "who has the best armor wall at this BR?".
+  // For every ground BR step, THE one nation whose best-armored ground
+  // vehicles AT that BR beat every other nation's. Ground mains only (no
+  // SPAA / aircraft / helicopters), tech-tree only so anyone can grind the
+  // lineup, vehicles within one BR step (0.3) of the target so the lineup is
+  // genuinely "at its BR" — and no swapping.
   //
-  // Armor metric is the same one the Armor playstyle ranks by: the precomputed
-  // effective-protection score (steel × quality + composite arrays + ERA
-  // coverage) with a raw-steel fallback. It's an internal mm-ish scale that is
-  // comparable across nations inside one BR bracket — and, as always, it is
-  // never displayed as a millimeter figure.
+  // Armor metric: the slope-corrected per-path protection scores baked into
+  // armor.json (eh = hull, et = turret; steel × quality × documented slope +
+  // composite arrays + ERA). Blended 45/55 hull/turret so a monster turret on
+  // a paper hull (Challenger 2) can't outrank an all-round wall (Strv 122).
+  // Internal scale only — never displayed as a millimeter figure.
   function bestArmorLineups(units, mode) {
-    const SIZE = 5;   // vehicles per lineup
-    const MIN = 3;    // fewer than this and the "lineup" is a gimmick — skip
-    const armorValue = u =>
-      u.armorEff ?? Math.max(u.armorHull ?? 0, u.armorTurret ?? 0);
+    const SIZE = 5;        // vehicles per lineup
+    const MIN = 3;         // fewer than this isn't a lineup — nation skipped
+    const AT_BR = 0.3;     // one matchmaker step: "at its BR", not a downtier pile
+    const armorValue = u => {
+      if (u.armorEffHull != null || u.armorEffTurret != null) {
+        return 0.45 * (u.armorEffHull ?? 0) + 0.55 * (u.armorEffTurret ?? 0);
+      }
+      return u.armorEff ?? Math.max(u.armorHull ?? 0, u.armorTurret ?? 0);
+    };
 
     const mains = units.filter(u =>
       u.type === "tank" && u.cls !== "spaa" &&
@@ -518,36 +523,36 @@ const LINEUP = (() => {
     const nations = [...new Set(mains.map(u => u.country))];
     const brSteps = [...new Set(mains.map(u => u.br[mode]))].sort((a, b) => a - b);
 
-    // BR-closeness-weighted armor: a downtier pick still counts, but a nation
-    // can't win a BR step on 1.0-lower ballast. Same brScore curve the
-    // generator uses, so "core vs ballast" means the same thing everywhere.
     const out = [];
     for (const target of brSteps) {
-      const vehScore = u => armorValue(u) * (0.55 + 0.45 * brScore(u.br[mode], target));
-      const contenders = [];
+      let best = null;
       for (const nation of nations) {
         const pool = mains.filter(u =>
           u.country === nation &&
           u.br[mode] <= target + 1e-9 &&
-          u.br[mode] >= target - BR_WINDOW - 1e-9);
+          u.br[mode] >= target - AT_BR - 1e-9);
         // The lineup must actually queue at this BR — at least one vehicle at
         // exactly the target, otherwise it's a lower-BR lineup wearing a label.
         if (!pool.some(u => Math.abs(u.br[mode] - target) < 1e-9)) continue;
-        const picks = rankBy(pool, vehScore).slice(0, SIZE);
+        const ranked = rankBy(pool, armorValue);
+        // Quality floor: every pick must carry a real fraction of the lineup's
+        // best armor. Four Tiger IIs don't get a paper light tank as a fifth
+        // "armor" pick just because it's next in line — and a nation whose
+        // depth is two walls plus filler isn't the best armor lineup at this
+        // BR at all. 0.4 (not 0.5): an IS-3 tops its own lineup so hard that
+        // a legitimate IS-2/T-44 backbone sits just under half its score.
+        const floor = ranked.length ? armorValue(ranked[0]) * 0.4 : 0;
+        const picks = ranked.filter(u => armorValue(u) >= floor).slice(0, SIZE);
         if (picks.length < MIN) continue;
-        // Mean over SIZE slots with missing slots as 0: depth is part of being
-        // the best armor lineup, so 3 great heavies don't auto-beat 5 good ones.
-        const score = picks.reduce((s, u) => s + vehScore(u), 0) / SIZE;
-        contenders.push({ nation, picks, score });
+        // Mean armor of the picks, with a mild depth factor: a 3-tank wall of
+        // supreme armor should beat 5 mediocre hulls, but ties break toward
+        // the nation that can actually fill the crew slots.
+        const score =
+          (picks.reduce((s, u) => s + armorValue(u), 0) / picks.length) *
+          (0.9 + 0.1 * picks.length / SIZE);
+        if (!best || score > best.score) best = { nation, picks, score };
       }
-      if (!contenders.length) continue;
-      contenders.sort((a, b) => b.score - a.score);
-      out.push({
-        br: target,
-        nation: contenders[0].nation,
-        slots: contenders[0].picks,
-        runnerUp: contenders[1] ? contenders[1].nation : null,
-      });
+      if (best) out.push({ br: target, nation: best.nation, slots: best.picks });
     }
     return out;
   }

@@ -45,7 +45,7 @@ const WT_DATA = (() => {
   // without its field name changing (e.g. name-marker stripping below), so
   // already-cached clients re-parse instead of serving the old-format value.
   const SCHEMA = "id name country type cls diveBomber rank br premium squadron gift " +
-    "researchPoints armorHull armorTurret armorSide angleOk armorEff hasEra hasComposite autoLoader " +
+    "researchPoints armorHull armorTurret armorSide angleOk armorEff armorEffHull armorEffTurret hasEra hasComposite autoLoader " +
     "stabPlanes stabilized thermal thermalGen nv revRatio " +
     "hpPerTon gunVel gunCal gunPen gunPenSrc turnTime maxSpeed climbRate " +
     "crewCount reloadTime turretSpeed " +
@@ -403,6 +403,8 @@ const WT_DATA = (() => {
         armorSide: 0,        // armor.json — thickest hull-side plate (mm); feeds the angling advisor
         angleOk: false,      // armor.json — builder-verified "flat front + thick sides" flag
         armorEff: null,      // armor.json — ranking-only protection score (never shown as mm)
+        armorEffHull: null,  // armor.json — per-path ranking score, hull (never shown as mm)
+        armorEffTurret: null, // armor.json — per-path ranking score, turret (never shown as mm)
         hasEra: false,       // armor.json — ERA tiles present in model
         hasComposite: false, // armor.json — composite/NERA arrays present
         autoLoader: false,   // armor.json — game's own autoLoader flag on the main gun
@@ -609,6 +611,8 @@ const WT_DATA = (() => {
       if (a.hs > 0) u.armorSide = a.hs;
       u.angleOk = !!a.ang;
       if (a.eff > 0) u.armorEff = a.eff;
+      if (a.eh > 0) u.armorEffHull = a.eh;
+      if (a.et > 0) u.armorEffTurret = a.et;
       u.hasEra = !!a.era;
       u.hasComposite = !!a.comp;
       u.autoLoader = !!a.al;

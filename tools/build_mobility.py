@@ -135,6 +135,59 @@ _NO_ANGLE_RE = [
     re.compile(r"arl_44"),             # ARL-44 — 120mm well-sloped UFP
 ]
 
+# Frontal slope correction for the eff rating, by design family. The damage
+# model stores plate THICKNESS but not orientation (slope lives in the 3D
+# collision mesh), so raw plates systematically underrate sloped designs: an
+# IS-2's 120mm-at-60° glacis (~240mm LoS) reads as 120 while a T34's flat
+# 305mm mantlet reads as 305 — which made the USA sweep every WWII "best
+# armor" bracket. Like the angling list above, this is hand-curated ground
+# truth (multipliers ≈ 1/cos of the documented glacis/turret slope,
+# conservative), kept HERE next to the canon guards. First matching regex
+# wins; (hull_mult, turret_mult) apply to the STEEL paths only — composite
+# arrays already model LoS thickness and are never multiplied.
+_SLOPE_EFF = [
+    # --- casemates / TDs first (before broader family patterns) ---
+    (re.compile(r"jagdpanther"),               1.7, 1.7),   # 80mm @ 55°
+    (re.compile(r"jagdtiger"),                 1.3, 1.05),  # 150 @ 50 hull, 250 @ 15 case
+    (re.compile(r"ferdinand"),                 1.0, 1.0),   # 200mm flat
+    # --- USSR / China (sloped & pike school) ---
+    (re.compile(r"(^|_)t_34_85"),              1.6, 1.1),
+    (re.compile(r"(^|_)t_34"),                 1.8, 1.1),   # 45mm @ 60°
+    (re.compile(r"kv_85|kv_122"),              1.2, 1.2),
+    (re.compile(r"kv_1"),                      1.25, 1.15),
+    (re.compile(r"(^|_)is_1"),                 1.5, 1.2),
+    (re.compile(r"(^|_)is_2"),                 1.9, 1.2),   # 120 @ 60° glacis
+    (re.compile(r"(^|_)is_3|wz_111"),          2.6, 1.35),  # pike nose 110 compound
+    (re.compile(r"(^|_)is_4"),                 1.9, 1.35),
+    (re.compile(r"t_10a|t_10b|t_10m"),         1.9, 1.3),
+    (re.compile(r"(^|_)t_44"),                 1.6, 1.15),
+    (re.compile(r"t_54_|t_55|type_59|type_69"), 1.9, 1.25), # 100 @ 60°
+    (re.compile(r"(^|_)t_62"),                 1.9, 1.25),
+    # --- Germany ---
+    (re.compile(r"tiger_ii|kungstiger"),       1.55, 1.0),  # 150 @ 50° glacis
+    (re.compile(r"panther"),                   1.8, 1.0),   # 80-85 @ 55° glacis
+    (re.compile(r"maus|pzkpfw_e_100"),         1.55, 1.15), # 200 @ 55°
+    # --- USA ---
+    (re.compile(r"m4a3e2"),                    1.5, 1.1),   # Jumbo 47° glacis + tranny
+    (re.compile(r"(^|_)t26e5"),                1.4, 1.15),
+    (re.compile(r"(^|_)t2[69]e?|(^|_)t3[024]"), 1.5, 1.0),  # T29/30/32/34 sloped hulls, flat mantlets
+    (re.compile(r"(^|_)m4[678]|(^|_)m60"),     1.4, 1.1),
+    # --- Britain / France ---
+    (re.compile(r"centurion|shot_kal|caernarvon"), 1.6, 1.1),
+    (re.compile(r"conqueror"),                 1.3, 1.0),
+    (re.compile(r"arl_44"),                    1.5, 1.0),
+    (re.compile(r"amx_m4|amx_50"),             1.3, 1.0),
+]
+
+
+def _slope_mults(uid):
+    uid_l = uid.lower()
+    for rx, hm, tm in _SLOPE_EFF:
+        if rx.search(uid_l):
+            return hm, tm
+    return 1.0, 1.0
+
+
 # Hull sides thinner than this can't survive being turned toward the enemy.
 _ANGLE_SIDE_MIN = 55.0
 
@@ -181,10 +234,17 @@ _CANON_HS = {
 # plates (228mm "turret_04" recoil block on a ~5mm vehicle) — if its eff ever
 # climbs back into real-armor territory, the artifact filter has regressed.
 _CANON_EFF = {
-    # id: (min_eff, max_eff)
-    "us_m56_scorpion":              (0, 60),     # ~unarmored TD
-    "us_t26e5":                     (120, 220),  # 152mm hull "Jumbo Pershing"
-    "germ_pzkpfw_VI_ausf_e_tiger":  (80, 140),   # Tiger I ~100mm flat
+    # id: (min_eff, max_eff) — post-slope-correction expected ranges, anchored
+    # to well-documented effective frontal protection.
+    "us_m56_scorpion":                 (0, 60),     # ~unarmored TD
+    "us_t26e5":                        (150, 260),  # 152mm @ 46° hull
+    "germ_pzkpfw_VI_ausf_e_tiger":     (80, 150),   # Tiger I ~100mm flat
+    "ussr_is_2_1944":                  (170, 260),  # 120mm @ 60° glacis ≈ 240
+    "germ_pzkpfw_VI_ausf_b_tiger_IIh": (200, 270),  # 150mm @ 50° glacis ≈ 233
+    "ussr_is_3":                       (280, 420),  # pike nose / 250 cast turret
+    "us_t34":                          (260, 360),  # flat ~280mm mantlet
+    "jp_type_90":                      (300, 550),  # unquoted; LoS "steel" must route to comp
+    "germ_leopard_2a7v":               (380, 560),  # comp arrays + spall liner
 }
 
 
@@ -623,20 +683,34 @@ def _iter_damage_parts(dp):
 
 
 # Caps for the eff rating (see the design comment above).
-_COMP_CAP = 350.0   # a single huge array is LoS thickness, not that much RHA
+_COMP_CAP = 400.0   # a single huge array is LoS thickness, not that much RHA
 _ERA_PER_TILE = 15.0
 _ERA_CAP = 80.0
+# Unquoted vehicles (Japan's whole tree ships no Shop armor triples) get no
+# quote-based artifact cap. A "steel" plate above this on such a vehicle is a
+# composite module modeled with LoS thickness and no armorClass (Type 90:
+# 450/585mm "steel") — it is routed to the composite path (which _COMP_CAP
+# bounds) instead of dominating the steel path.
+_NO_QUOTE_STEEL_MAX = 350.0
+# Spall liners (spall_liner_NN_dm blocks, top-tier survivability upgrade)
+# don't stop the penetrator but keep the crew alive when something gets
+# through — worth a flat ranking bonus on both paths.
+_SPALL_BONUS = 35.0
 
 
-def _armor_stats_from_model(model, quotes=None):
+def _armor_stats_from_model(model, quotes=None, slope=(1.0, 1.0)):
     """Armor descriptor for a tank, all from its DamageParts block:
-      h/t  — thickest frontal steel plate on hull/turret (mm) — display
-      eff  — effective-protection rating for ranking (steel×quality +
-             best composite array + ERA coverage bonus)
+      h/t   — thickest frontal steel plate on hull/turret (mm) — display
+      eh/et — per-path effective-protection ratings (slope-corrected steel ×
+              quality + composite array + ERA bonus) — ranking only. Both
+              paths ship so the client can punish a weak hull (Challenger 2:
+              monster turret, 70mm hull) instead of only seeing the best path.
+      eff   — max(eh, et), kept for the Armor playstyle percentile
       era/comp — presence flags
     `quotes` is this vehicle's shop-quoted armor ({"hull","turret","side"} mm
     or None each) — steel plates far above the quote are gun-mount artifacts,
-    not armor, and are skipped (see _steel_cap).
+    not armor, and are skipped (see _steel_cap). `slope` is the curated
+    (hull_mult, turret_mult) from _SLOPE_EFF, applied to steel paths only.
     Returns None only if the model has no DamageParts at all."""
     dp = model.get("DamageParts")
     if not isinstance(dp, dict):
@@ -734,9 +808,24 @@ def _armor_stats_from_model(model, quotes=None):
                 # gun-mount artifact (M56's 228mm "turret"), not armor.
                 if cap[target] is not None and t > cap[target]:
                     continue
+                # No quote to check against: an oversized "steel" plate on an
+                # unquoted vehicle is a composite module with LoS thickness
+                # (Type 90) — count it as composite, not steel.
+                if cap[target] is None and t > _NO_QUOTE_STEEL_MAX:
+                    add_comp(target, t, gq)
+                    continue
                 steel_raw[target] = max(steel_raw[target], t)
                 q = gq if isinstance(gq, (int, float)) and gq > 0 else 1.0
                 steel_eff[target] = max(steel_eff[target], t * q)
+
+    # Spall liners: spall_liner_NN_dm blocks (either level of DamageParts).
+    n_spall = 0
+    for key, blk in _iter_damage_parts(dp):
+        if "spall" in key.lower():
+            n_spall += 1
+        for k2, v2 in blk.items():
+            if isinstance(v2, dict) and "spall" in k2.lower():
+                n_spall += 1
 
     # ERA tile count (Kontakt/Relikt/Blazer boxes).
     n_era = 0
@@ -754,17 +843,20 @@ def _armor_stats_from_model(model, quotes=None):
                         n_era += 1
 
     has_comp = comp_eff["hull"] >= 1 or comp_eff["turret"] >= 1
-    eff = max(
-        steel_eff["hull"] + min(comp_eff["hull"], _COMP_CAP),
-        steel_eff["turret"] + min(comp_eff["turret"], _COMP_CAP),
-    ) + min(n_era * _ERA_PER_TILE, _ERA_CAP)
+    hm, tm = slope
+    bonus = min(n_era * _ERA_PER_TILE, _ERA_CAP) + (_SPALL_BONUS if n_spall else 0)
+    eh = steel_eff["hull"] * hm + min(comp_eff["hull"], _COMP_CAP) + bonus
+    et = steel_eff["turret"] * tm + min(comp_eff["turret"], _COMP_CAP) + bonus
     return {
         "h": round(steel_raw["hull"], 1),
         "t": round(steel_raw["turret"], 1),
         "hs": round(hull_side, 1),
-        "eff": round(eff),
+        "eh": round(eh),
+        "et": round(et),
+        "eff": round(max(eh, et)),
         "era": 1 if n_era > 0 else 0,
         "comp": 1 if has_comp else 0,
+        "sl": 1 if n_spall else 0,
     }
 
 
@@ -969,7 +1061,7 @@ def fetch_vehicle(unit_id):
 
     gun = _gun_stats_from_model(model, _mods_by_id.get(unit_id, frozenset()))
     spaa = _spaa_stats_from_model(model) if unit_id in _spaa_ids else None
-    armor = _armor_stats_from_model(model, _shop_armor.get(unit_id))
+    armor = _armor_stats_from_model(model, _shop_armor.get(unit_id), _slope_mults(unit_id))
     if armor is not None:
         armor["stab"] = _stabilizer_planes(model)
         thermal, nv, thermal_gen = _night_vision(model)
@@ -1108,6 +1200,8 @@ def main():
     _guard_field_regression("armor/hs", "hs", hs_n, ARMOR_OUT)
     ang_n = sum(1 for v in armor.values() if v.get("ang"))
     _guard_field_regression("armor/ang", "ang", ang_n, ARMOR_OUT)
+    sl_n = sum(1 for v in armor.values() if v.get("sl"))
+    _guard_field_regression("armor/sl", "sl", sl_n, ARMOR_OUT)
     # Known-truth plate check — FATAL on mismatch (see _CANON_HS).
     _guard_canon_hs(armor)
     # Angling-data audit: every heavy tank with no measured hull side is a
