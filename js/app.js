@@ -290,7 +290,8 @@
   }
 
   // In-match "should I angle this tank?" badge. Ground vehicles only; the
-  // advisor (WT_DATA.angleAdvice) returns null for aircraft/helis.
+  // advisor (WT_DATA.angleAdvice) returns null for aircraft/helis. Verdict
+  // only — the reasoning lives in the hover tooltip so the card stays clean.
   function angleBadge(unit, mode) {
     const adv = WT_DATA.angleAdvice(unit, mode);
     if (!adv) return "";
@@ -300,7 +301,6 @@
       <div class="angle-tag angle-${key}" title="${esc(adv.tip)}">
         <span class="angle-ico" aria-hidden="true">${ico}</span>
         <span class="angle-verdict">${esc(adv.verdict)}</span>
-        <span class="angle-why">${esc(adv.why)}</span>
       </div>`;
   }
 

@@ -769,10 +769,6 @@ input:focus {
   color: var(--angle-color);
   white-space: nowrap;
 }
-.angle-tag .angle-why {
-  color: var(--text-dim);
-  font-size: 0.72rem;
-}
 .angle-yes { --angle-color: #7bbf5a; }  /* green — do it */
 .angle-no  { --angle-color: #8794a3; }  /* muted slate — stay flat */
 
