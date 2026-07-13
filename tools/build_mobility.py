@@ -83,6 +83,30 @@ _mods_by_id = {}
 # Which tank ids are SPAA (from unittags). Only these get an spaa.json entry.
 _spaa_ids = set()
 
+# Gaijin's own quoted armor triples from unittags Shop
+# (armorThicknessHull/Turret = [front, side, back] mm) — the sanity anchor for
+# the model scan. Some damage models contain internal gun-mount blocks with
+# huge armorThickness values that are NOT armor (the M56 Scorpion — a
+# near-unarmored TD whose shop quote is turret 5mm — models a 228mm
+# `turret_04_front_dm` recoil-mechanism block; plate-name scanning read it as
+# a 228mm turret and crowned it a "best armor" pick). A steel plate that
+# wildly exceeds the quote is such an artifact and is skipped; see _steel_cap.
+# id -> {"hull": front_mm|None, "turret": front_mm|None, "side": side_mm|None}
+_shop_armor = {}
+
+
+def _steel_cap(quote):
+    """Max believable STEEL plate (mm) given the shop-quoted value for that
+    zone. 4× tolerates legitimately-thicker-than-quote plates (T-72 cast
+    cheeks ~400mm vs a 125mm quote); the +60 / 60 floors keep small real
+    plates on near-zero-quote vehicles. Composite arrays are never capped —
+    their LoS thickness legitimately dwarfs the quote (Leopard 2 hulls quote
+    ~45mm steel but carry 600mm+ arrays), and they're already bounded by
+    _COMP_CAP. None (no Shop quote at all) = no cap."""
+    if quote is None:
+        return None
+    return max(quote * 4, quote + 60, 60)
+
 # Heavy-tank ids (from unittags), for the post-build angling-data audit: a
 # heavy with no measured hull side is exactly the gap that hid the Churchill
 # bug, so every one of them is listed loudly after each build.
@@ -152,6 +176,17 @@ _CANON_HS = {
     "ussr_t_80u":                      (60, 100, 0),   # T-80U — composite/top tier
 }
 
+# Ground-truth EFF ranges, same fatal-on-mismatch idea as _CANON_HS but for the
+# ranking score: the M56 Scorpion is the poster child for gun-mount artifact
+# plates (228mm "turret_04" recoil block on a ~5mm vehicle) — if its eff ever
+# climbs back into real-armor territory, the artifact filter has regressed.
+_CANON_EFF = {
+    # id: (min_eff, max_eff)
+    "us_m56_scorpion":              (0, 60),     # ~unarmored TD
+    "us_t26e5":                     (120, 220),  # 152mm hull "Jumbo Pershing"
+    "germ_pzkpfw_VI_ausf_e_tiger":  (80, 140),   # Tiger I ~100mm flat
+}
+
 
 def _guard_canon_hs(armor):
     """Abort the build if any canonical hull-side value or baked angling
@@ -169,6 +204,14 @@ def _guard_canon_hs(armor):
             errors.append(f"{uid}: hs={hs} outside known-truth range [{lo}, {hi}]")
         if row.get("ang", 0) != want_ang:
             errors.append(f"{uid}: ang={row.get('ang')} expected {want_ang}")
+    for uid, (lo, hi) in _CANON_EFF.items():
+        row = armor.get(uid)
+        if row is None:
+            errors.append(f"{uid}: missing from armor build entirely")
+            continue
+        eff = row.get("eff", 0)
+        if not (lo <= eff <= hi):
+            errors.append(f"{uid}: eff={eff} outside known-truth range [{lo}, {hi}]")
     if errors:
         raise SystemExit(
             "FATAL: canonical angling-armor check failed — refusing to write "
@@ -585,16 +628,25 @@ _ERA_PER_TILE = 15.0
 _ERA_CAP = 80.0
 
 
-def _armor_stats_from_model(model):
+def _armor_stats_from_model(model, quotes=None):
     """Armor descriptor for a tank, all from its DamageParts block:
       h/t  — thickest frontal steel plate on hull/turret (mm) — display
       eff  — effective-protection rating for ranking (steel×quality +
              best composite array + ERA coverage bonus)
       era/comp — presence flags
+    `quotes` is this vehicle's shop-quoted armor ({"hull","turret","side"} mm
+    or None each) — steel plates far above the quote are gun-mount artifacts,
+    not armor, and are skipped (see _steel_cap).
     Returns None only if the model has no DamageParts at all."""
     dp = model.get("DamageParts")
     if not isinstance(dp, dict):
         return None
+    quotes = quotes or {}
+    cap = {
+        "hull": _steel_cap(quotes.get("hull")),
+        "turret": _steel_cap(quotes.get("turret")),
+        "side": _steel_cap(quotes.get("side")),
+    }
 
     steel_raw = {"hull": 0.0, "turret": 0.0}   # display mm (plate as modeled)
     steel_eff = {"hull": 0.0, "turret": 0.0}   # × genericArmorQuality
@@ -653,7 +705,8 @@ def _armor_stats_from_model(model):
             # can't hide a flank (the Churchill bug).
             if ("side" in k2l and plate_target(k2l) == "hull"
                     and "track" not in k2l and "wheel" not in k2l
-                    and "skirt" not in k2l and t >= 20):
+                    and "skirt" not in k2l and t >= 20
+                    and (cap["side"] is None or t <= cap["side"])):
                 hull_side = max(hull_side, t)
             # Roof/floor/flank plates never count toward frontal protection.
             if "top" in k2l or "bottom" in k2l or "side" in k2l:
@@ -677,6 +730,10 @@ def _armor_stats_from_model(model):
             if plate_is_composite:
                 add_comp(target, t, gq)
             else:
+                # Steel plate far above the shop quote for this zone = internal
+                # gun-mount artifact (M56's 228mm "turret"), not armor.
+                if cap[target] is not None and t > cap[target]:
+                    continue
                 steel_raw[target] = max(steel_raw[target], t)
                 q = gq if isinstance(gq, (int, float)) and gq > 0 else 1.0
                 steel_eff[target] = max(steel_eff[target], t * q)
@@ -912,7 +969,7 @@ def fetch_vehicle(unit_id):
 
     gun = _gun_stats_from_model(model, _mods_by_id.get(unit_id, frozenset()))
     spaa = _spaa_stats_from_model(model) if unit_id in _spaa_ids else None
-    armor = _armor_stats_from_model(model)
+    armor = _armor_stats_from_model(model, _shop_armor.get(unit_id))
     if armor is not None:
         armor["stab"] = _stabilizer_planes(model)
         thermal, nv, thermal_gen = _night_vision(model)
@@ -991,6 +1048,16 @@ def main():
     _heavy_ids.update(
         k for k in tanks if unittags.get(k, {}).get("tags", {}).get("type_heavy_tank")
     )
+    # Shop-quoted armor triples — the artifact-plate sanity anchor (_steel_cap).
+    for k in tanks:
+        shop = unittags.get(k, {}).get("Shop", {})
+        hull = shop.get("armorThicknessHull")
+        tur = shop.get("armorThicknessTurret")
+        _shop_armor[k] = {
+            "hull": hull[0] if isinstance(hull, list) and hull else None,
+            "turret": tur[0] if isinstance(tur, list) and tur else None,
+            "side": hull[1] if isinstance(hull, list) and len(hull) > 1 else None,
+        }
     print(f"{len(tanks)} tanks ({len(_spaa_ids)} SPAA) — fetching model + gun files…")
 
     mobility, guns, spaa, armor = {}, {}, {}, {}

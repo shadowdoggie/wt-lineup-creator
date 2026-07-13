@@ -26,6 +26,7 @@
   };
 
   const state = { units: [], mode: "realistic", fetchedAt: null, desiredBR: null };
+  let armorLineups = null; // lazy cache for the fixed best-armor list; reset on data (re)load
   let current = null; // { result, options } — kept so swaps can mutate the lineup
   let loading = false; // guards against overlapping downloads (e.g. Refresh spam)
 
@@ -66,6 +67,10 @@
       renderDataStatus(res);
       renderDataWarnings(res.dataWarnings);
       refreshBROptions();
+      // New vehicle data invalidates the fixed best-armor list; re-render it
+      // now if that view is the one on screen.
+      armorLineups = null;
+      if (!$("armorView").hidden) renderArmorView();
     } catch (err) {
       // Put the overlay into an actionable error state: stop the spinner, hide
       // the step list, and surface a Retry button *inside* the overlay (the
@@ -389,6 +394,69 @@
     }
   }
 
+  /* ---------- best armor lineups view ---------- */
+
+  // Fixed card: no swap button, no slot number — this list is not editable.
+  // Armor figures shown are the factual steel plate thicknesses from the game
+  // files; the effective-protection score used for RANKING is internal and is
+  // never displayed (it isn't a real millimeter value).
+  function armorCard(u, mode) {
+    const meta = CLS_META[u.cls] || { label: u.cls.toUpperCase(), color: "var(--text-dim)" };
+    const stat = (title, inner) => `<span class="stat" title="${esc(title)}">${inner}</span>`;
+    const bits = [`<span class="br-chip">${u.br[mode].toFixed(1)}</span>`];
+    if (u.armorHull != null) bits.push(stat("Thickest frontal hull plate (steel)", `Hull ${Math.round(u.armorHull)} mm`));
+    if (u.armorTurret != null) bits.push(stat("Thickest frontal turret plate (steel)", `Turret ${Math.round(u.armorTurret)} mm`));
+    if (u.hasComposite) bits.push(stat("Composite / NERA arrays in the armor model", "Composite"));
+    if (u.hasEra) bits.push(stat("Explosive reactive armor tiles in the model", "ERA"));
+    return `
+      <div class="slot-card armor-card" style="--cls-color:${meta.color}">
+        <div class="slot-head">
+          <span class="cls-badge">${meta.label}</span>
+        </div>
+        <div class="veh-name">${esc(u.name)}</div>
+        <div class="veh-meta">${bits.join(" ")}</div>
+        ${angleBadge(u, mode)}
+      </div>`;
+  }
+
+  function nationLabel(id) {
+    return WT_DATA.NATIONS.find(n => n[0] === id)?.[1] || id;
+  }
+
+  function renderArmorView() {
+    const el = $("armorList");
+    if (!state.units.length) {
+      el.innerHTML = `<p class="pool-note">Waiting for game data…</p>`;
+      return;
+    }
+    if (!armorLineups) armorLineups = LINEUP.bestArmorLineups(state.units, state.mode);
+    if (!armorLineups.length) {
+      el.innerHTML = `<p class="pool-note">No armor data available — check the data warnings above.</p>`;
+      return;
+    }
+    el.innerHTML = armorLineups.map(entry => `
+      <section class="ba-entry">
+        <div class="ba-head">
+          <span class="ba-br">BR ${entry.br.toFixed(1)}</span>
+          <h3>${esc(nationLabel(entry.nation))}</h3>
+          <span class="tag">${entry.slots.length} vehicles</span>
+          ${entry.runnerUp ? `<span class="ba-runnerup">runner-up: ${esc(nationLabel(entry.runnerUp))}</span>` : ""}
+        </div>
+        <div class="lineup-grid ba-grid">
+          ${entry.slots.map(u => armorCard(u, state.mode)).join("")}
+        </div>
+      </section>`).join("");
+  }
+
+  function switchView(view) {
+    const armor = view === "armor";
+    $("builderView").hidden = armor;
+    $("armorView").hidden = !armor;
+    $("tabBuilder").classList.toggle("active", !armor);
+    $("tabArmor").classList.toggle("active", armor);
+    if (armor) renderArmorView();
+  }
+
   /* ---------- events ---------- */
 
   function init() {
@@ -424,6 +492,9 @@
       const btn = e.target.closest(".swap-btn");
       if (btn && !btn.disabled) swapSlot(parseInt(btn.dataset.slot, 10));
     });
+
+    $("tabBuilder").addEventListener("click", () => switchView("builder"));
+    $("tabArmor").addEventListener("click", () => switchView("armor"));
 
     $("refreshBtn").addEventListener("click", () => loadData(true));
     $("retryBtn").addEventListener("click", () => loadData(true));

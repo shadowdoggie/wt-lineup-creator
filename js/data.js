@@ -638,7 +638,10 @@ const WT_DATA = (() => {
 
   async function fetchJsonSoft(url) {
     try {
-      const res = await fetch(url);
+      // no-cache = revalidate with the server (304 when unchanged). Without it
+      // the browser's heuristic cache can serve a stale stat file for days,
+      // defeating the whole point of merging these at load time.
+      const res = await fetch(url, { cache: "no-cache" });
       return res.ok ? await res.json() : null;
     } catch {
       return null;

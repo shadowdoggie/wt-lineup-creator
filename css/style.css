@@ -186,6 +186,119 @@ body {
 .data-warnings strong { color: var(--red); }
 .data-warnings .ico { color: var(--red); }
 
+/* ---------- View tabs ---------- */
+
+.view-tabs {
+  width: min(1400px, 100%);
+  margin: 0 auto;
+  padding: 12px 26px 0;
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.view-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 18px;
+  background: var(--panel);
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.view-tab:hover:not(.active) { color: var(--text); border-color: var(--gold-dim); }
+.view-tab.active {
+  background: linear-gradient(180deg, var(--gold), var(--gold-2));
+  border-color: var(--gold-2);
+  color: var(--gold-ink);
+  font-weight: 700;
+  box-shadow: 0 2px 8px rgba(233, 182, 74, 0.2);
+}
+.view-tab .ico { font-size: 1rem; }
+
+@media (max-width: 900px) {
+  .view-tabs { padding: 12px 16px 0; }
+}
+
+/* ---------- Best armor lineups view ---------- */
+
+.armor-view {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 18px 26px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+@media (max-width: 900px) {
+  .armor-view { padding: 16px; overflow-y: visible; min-height: auto; }
+}
+
+.armor-view-head { margin-bottom: 20px; }
+.armor-view-head h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-display);
+  font-size: 1.7rem;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  line-height: 1.1;
+  margin-bottom: 6px;
+}
+.armor-view-head h2 .ico { color: var(--gold); font-size: 1.4rem; }
+.armor-view-head p {
+  color: var(--text-dim);
+  font-size: 0.87rem;
+  line-height: 1.5;
+  max-width: 760px;
+}
+
+.ba-entry { margin-bottom: 26px; }
+.ba-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-bottom: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+}
+.ba-head h3 {
+  font-family: var(--font-display);
+  font-size: 1.3rem;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  line-height: 1;
+}
+.ba-br {
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--gold);
+  background: var(--gold-glow);
+  border: 1px solid var(--gold-dim);
+  border-radius: 4px;
+  padding: 1px 10px;
+}
+.ba-runnerup { color: var(--text-faint); font-size: 0.76rem; }
+
+.ba-grid { margin-bottom: 0; }
+.armor-card .veh-meta { margin-bottom: 0; }
+.armor-card .angle-tag { margin: 10px 0 0; }
+
 /* ---------- Layout ---------- */
 
 .layout {

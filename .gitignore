@@ -3,3 +3,4 @@ Desktop.ini
 *.log
 node_modules/
 .claude/settings.local.json
+__pycache__/

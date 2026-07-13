@@ -55,7 +55,16 @@
 
 <div class="data-warnings" id="dataWarnings" hidden></div>
 
-<div class="layout">
+<nav class="view-tabs" aria-label="Site view">
+  <button type="button" class="view-tab active" id="tabBuilder">
+    <svg class="ico"><use href="#i-compass"/></svg> Lineup builder
+  </button>
+  <button type="button" class="view-tab" id="tabArmor">
+    <svg class="ico"><use href="#i-shield"/></svg> Best armor lineups
+  </button>
+</nav>
+
+<div class="layout" id="builderView">
 
   <aside class="panel form-panel">
     <form id="lineupForm">
@@ -191,6 +200,17 @@
   </main>
 
 </div>
+
+<main class="armor-view" id="armorView" hidden>
+  <div class="armor-view-head">
+    <h2><svg class="ico"><use href="#i-shield"/></svg> Best armor lineups</h2>
+    <p>For every battle rating: the nation whose ground lineup has the strongest armor.
+      Ranked by effective protection (steel quality, composite arrays, ERA coverage) —
+      tech-tree ground vehicles only, no SPAA, no aircraft, no helicopters, and no swapping.
+      These lineups are fixed.</p>
+  </div>
+  <div id="armorList"></div>
+</main>
 
 <footer class="site-footer">
   <span>Battle-rating &amp; vehicle data from the
