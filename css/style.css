@@ -754,7 +754,6 @@ input:focus {
   line-height: 1.25;
   border: 1px solid var(--angle-color);
   background: color-mix(in srgb, var(--angle-color) 13%, transparent);
-  cursor: help;
 }
 .angle-tag .angle-ico {
   font-size: 0.9rem;
